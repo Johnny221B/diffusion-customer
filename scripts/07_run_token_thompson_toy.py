@@ -19,7 +19,7 @@ def main():
     opt = ThompsonOptimizer(dim_s, dim_z)
     
     # 模拟用户偏好目标
-    target_preference = "a luxury leather sneaker"
+    target_preference = "a white luxury leather sneaker"
 
     # --- 第一步：初始化 (冷启动/生成基础数据) ---
     print("Starting Cold Start...")
@@ -60,7 +60,7 @@ def main():
         z_full[:dim_z] = torch.from_numpy(best_z)
         
         # 生成图片 (Phase 1)
-        embeds = gen.encode_sandwich("a sneaker", "luxury style", z_full)
+        embeds = gen.encode_sandwich("a red sneaker", "luxury style", z_full)
         img = gen.generate(embeds, seed=999) 
         img.save(os.path.join(OUT_DIR, f"round_{t}.png"))
         
