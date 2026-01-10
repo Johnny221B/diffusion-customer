@@ -3,72 +3,68 @@ import torch
 import numpy as np
 from src.sd35_embedding_generator import SD35EmbeddingGenerator
 from src.thompson_optimizer import ThompsonOptimizer
-from src.scorer import CLIPScorer # 使用您已有的 scorer
+from src.scorer import CLIPScorer
 
+# 路径配置
 MODEL_DIR = "/home/linyuliu/jxmount/diffusion_custom/models/stabilityai/stable-diffusion-3.5-large"
-OUT_DIR = "/home/linyuliu/jxmount/diffusion_custom/thompson_toy_v2"
+OUT_DIR = "/home/linyuliu/jxmount/diffusion_custom/outputs/thompson_toy_v3"
 os.makedirs(OUT_DIR, exist_ok=True)
+
+# --- 新增：属性到文字的映射逻辑 ---
+def map_s_to_prompt(s):
+    brand = "Nike style" if s[0] == 1 else "Adidas style"
+    color = "white" if s[1] == 1 else "red"
+    return f"a {color} {brand} sneaker"
 
 def main():
     gen = SD35EmbeddingGenerator(MODEL_DIR)
     scorer = CLIPScorer(model_name="openai/clip-vit-base-patch32", device="cuda")
     
-    # 定义维度
-    dim_s = 2  # 结构化属性 (如是否品牌A, 是否亮色)
-    dim_z = 16 # 我们探索的风格向量维度
+    dim_s, dim_z = 2, 16
     opt = ThompsonOptimizer(dim_s, dim_z)
-    
-    # 模拟用户偏好目标
-    target_preference = "a white luxury leather sneaker"
+    target = "a luxury leather sneaker" # 模拟用户偏好
 
-    # --- 第一步：初始化 (冷启动/生成基础数据) ---
-    print("Starting Cold Start...")
+    # 1. 冷启动 (初始化 3 组数据)
     for i in range(3):
         s_rand = np.random.binomial(1, 0.5, dim_s)
-        z_rand = np.random.normal(0, 0.1, dim_z)
-        p_rand = np.random.uniform(50, 200) # 价格 p
+        z_rand = np.random.normal(0, 0.2, dim_z) # 稍大一点的初始噪声
+        p_rand = np.random.uniform(50, 200)
         
+        # 动态 Prompt 映射
+        prefix = map_s_to_prompt(s_rand)
         z_full = torch.zeros(4096)
         z_full[:dim_z] = torch.from_numpy(z_rand)
         
-        embeds = gen.encode_sandwich("a professional sneaker", "high quality", z_full)
-        img = gen.generate(embeds, seed=123+i)
+        embeds = gen.encode_sandwich(prefix, "high quality", z_full)
+        img = gen.generate(embeds, seed=100+i)
         img.save(os.path.join(OUT_DIR, f"init_{i}.png"))
         
-        score = float(scorer(img, target_preference))
-        x = np.concatenate([s_rand, z_rand, [-p_rand]]) # 构造 x
+        score = float(scorer(img, target))
+        x = np.concatenate([s_rand, z_rand, [-p_rand]])
         opt.update(x, score)
-    
-    # --- 第二步：Thompson 采样探索循环 ---
-    print("Starting Thompson Loop...")
+
+    # 2. Thompson 显式解循环
+    print("\nStarting Thompson Rounds with Analytical Solution...")
     for t in range(5):
-        # 采样偏好参数 theta
         theta = opt.sample_theta()
         
-        # 随机产生候选集 (模拟 Phase 0 的搜索过程)
-        candidates_s = [np.random.binomial(1, 0.5, dim_s) for _ in range(10)]
-        candidates_z = [np.random.normal(0, 0.2, dim_z) for _ in range(10)]
-        candidates_p = [np.random.uniform(50, 200) for _ in range(10)]
+        # --- 核心改进：计算显式最优解 ---
+        best_s, best_z, best_p = opt.solve_analytical_best(theta, R=0.5)
         
-        idx = opt.select_best_x(theta, candidates_s, candidates_z, candidates_p)
-        
-        best_z = candidates_z[idx]
-        best_s = candidates_s[idx]
-        best_p = candidates_p[idx]
+        # 动态 Prompt 映射：根据算法选出的 s 决定文字
+        dynamic_prefix = map_s_to_prompt(best_s)
         
         z_full = torch.zeros(4096)
         z_full[:dim_z] = torch.from_numpy(best_z)
         
-        # 生成图片 (Phase 1)
-        embeds = gen.encode_sandwich("a red sneaker", "luxury style", z_full)
-        img = gen.generate(embeds, seed=999) 
+        # 注入并生成图像
+        embeds = gen.encode_sandwich(dynamic_prefix, "luxury leather style", z_full)
+        img = gen.generate(embeds, seed=999) # 固定种子观察风格演变
         img.save(os.path.join(OUT_DIR, f"round_{t}.png"))
         
-        # 获取用户反馈 (Phase 3 模拟)
-        score = float(scorer(img, target_preference))
-        print(f"Round {t}: Score={score:.4f}, Selected Price={best_p:.2f}")
+        score = float(scorer(img, target))
+        print(f"Round {t}: Prompt='{dynamic_prefix}', Price={best_p:.1f}, Score={score:.4f}")
         
-        # 更新后验 (Phase 4)
         x = np.concatenate([best_s, best_z, [-best_p]])
         opt.update(x, score)
 

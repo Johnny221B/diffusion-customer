@@ -4,49 +4,46 @@ class ThompsonOptimizer:
     def __init__(self, dim_s, dim_z, prior_var=1.0):
         self.dim_s = dim_s
         self.dim_z = dim_z
-        # 总维度 d = d_s + d_z + 1 (价格项)
         self.d = dim_s + dim_z + 1 
-        
-        # 混合效用模型: U = beta*s + gamma*z - alpha*p
         self.mu = np.zeros(self.d)
         self.sigma = np.eye(self.d) * prior_var
-        
-        self.X = []
-        self.y = []
+        self.X, self.y = [], []
 
     def sample_theta(self):
-        """Phase 0: 汤普森采样，从后验中抽取偏好参数"""
+        """Phase 0: 采样偏好参数 theta"""
         return np.random.multivariate_normal(self.mu, self.sigma)
 
-    def select_best_x(self, theta, candidates_s, candidates_z, candidates_p):
+    def solve_analytical_best(self, theta, R=0.5):
         """
-        根据抽取的 theta，在候选空间中寻找效用最大的产品
-        x = (s, z, -p)
+        核心逻辑：计算风格向量 z 的显式解
+        Returns: (best_s, best_z, best_p)
         """
-        best_val = -float('inf')
-        best_idx = 0
-        
-        for i in range(len(candidates_s)):
-            # 构造特征向量，注意价格项取负值，确保其系数 alpha 对应负向效用
-            x = np.concatenate([candidates_s[i], candidates_z[i], [-candidates_p[i]]])
-            val = np.dot(theta, x)
-            if val > best_val:
-                best_val = val
-                best_idx = i
-        return best_idx
+        # 1. 提取各部分偏好参数
+        beta = theta[:self.dim_s]       # 结构化属性偏好
+        gamma = theta[self.dim_s : self.dim_s + self.dim_z] # 风格偏好
+        alpha = theta[-1]               # 价格敏感度 (通常 alpha > 0)
+
+        # 2. 计算 z 的显式解：沿着 gamma 方向推到半径 R 的边界
+        if np.linalg.norm(gamma) > 1e-9:
+            best_z = R * (gamma / np.linalg.norm(gamma))
+        else:
+            best_z = np.zeros(self.dim_z)
+
+        # 3. 决定属性 s：在线性效用下，取能使 beta * s 最大的离散值 (0 或 1)
+        best_s = np.where(beta > 0, 1, 0)
+
+        # 4. 决定价格 p：由于效用包含 -alpha * p，若 alpha > 0，最优价格为最低价
+        # 这里我们模拟一个价格区间 [50, 200]
+        best_p = 50.0 if alpha > 0 else 200.0
+
+        return best_s, best_z.astype(np.float32), best_p
 
     def update(self, x, outcome):
-        """Phase 4: 贝叶斯更新后验分布"""
+        """Phase 4: 贝叶斯更新"""
         self.X.append(x)
         self.y.append(outcome)
-        
         if len(self.X) < 2: return
-        
-        X_mat = np.array(self.X)
-        y_vec = np.array(self.y)
-        
-        # 贝叶斯线性回归更新 (在线更新示例)
-        precision_prior = np.eye(self.d)
-        precision_post = precision_prior + X_mat.T @ X_mat
-        self.sigma = np.linalg.inv(precision_post)
+        X_mat, y_vec = np.array(self.X), np.array(self.y)
+        prec_post = np.eye(self.d) + X_mat.T @ X_mat
+        self.sigma = np.linalg.inv(prec_post)
         self.mu = self.sigma @ (X_mat.T @ y_vec)
