@@ -5,12 +5,10 @@ from src.sd35_embedding_generator import SD35EmbeddingGenerator
 from src.thompson_optimizer import ThompsonOptimizer
 from src.scorer import CLIPScorer
 
-# 路径配置
 MODEL_DIR = "/home/linyuliu/jxmount/diffusion_custom/models/stabilityai/stable-diffusion-3.5-large"
-OUT_DIR = "/home/linyuliu/jxmount/diffusion_custom/outputs/thompson_toy_v3"
+OUT_DIR = "/home/linyuliu/jxmount/diffusion_custom/outputs/thompson_toy_v5"
 os.makedirs(OUT_DIR, exist_ok=True)
 
-# --- 新增：属性到文字的映射逻辑 ---
 def map_s_to_prompt(s):
     brand = "Nike style" if s[0] == 1 else "Adidas style"
     color = "white" if s[1] == 1 else "red"
@@ -20,17 +18,16 @@ def main():
     gen = SD35EmbeddingGenerator(MODEL_DIR)
     scorer = CLIPScorer(model_name="openai/clip-vit-base-patch32", device="cuda")
     
-    dim_s, dim_z = 2, 16
+    dim_s, dim_z = 2, 4096
     opt = ThompsonOptimizer(dim_s, dim_z)
-    target = "a luxury leather sneaker" # 模拟用户偏好
+    target = "a white luxury leather sneaker" # 模拟用户偏好。随便来了一个偏好
 
-    # 1. 冷启动 (初始化 3 组数据)
-    for i in range(3):
+    # 1. 冷启动 
+    for i in range(5):
         s_rand = np.random.binomial(1, 0.5, dim_s)
-        z_rand = np.random.normal(0, 0.2, dim_z) # 稍大一点的初始噪声
+        z_rand = np.random.normal(0, 0.2, dim_z)
         p_rand = np.random.uniform(50, 200)
         
-        # 动态 Prompt 映射
         prefix = map_s_to_prompt(s_rand)
         z_full = torch.zeros(4096)
         z_full[:dim_z] = torch.from_numpy(z_rand)
@@ -45,10 +42,9 @@ def main():
 
     # 2. Thompson 显式解循环
     print("\nStarting Thompson Rounds with Analytical Solution...")
-    for t in range(5):
+    for t in range(40):
         theta = opt.sample_theta()
         
-        # --- 核心改进：计算显式最优解 ---
         best_s, best_z, best_p = opt.solve_analytical_best(theta, R=0.5)
         
         # 动态 Prompt 映射：根据算法选出的 s 决定文字
@@ -57,9 +53,8 @@ def main():
         z_full = torch.zeros(4096)
         z_full[:dim_z] = torch.from_numpy(best_z)
         
-        # 注入并生成图像
         embeds = gen.encode_sandwich(dynamic_prefix, "luxury leather style", z_full)
-        img = gen.generate(embeds, seed=999) # 固定种子观察风格演变
+        img = gen.generate(embeds, seed=999)
         img.save(os.path.join(OUT_DIR, f"round_{t}.png"))
         
         score = float(scorer(img, target))
