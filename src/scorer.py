@@ -3,6 +3,10 @@ import numpy as np
 import torch
 from transformers import CLIPProcessor, CLIPModel
 
+from torchvision import transforms
+# 假设 dreamsim 文件夹在你的 python path 中
+from dreamsim import dreamsim
+
 
 class CLIPScorer:
     """
@@ -43,3 +47,35 @@ class ToyRedScorer:
         # 红色相对强度：r - (g+b)/2
         score = float((r - 0.5 * (g + b)).mean())
         return score
+
+
+import torch
+from PIL import Image
+from torchvision import transforms
+# 确保 dreamsim 库在您的 Python 路径中
+from dreamsim import dreamsim
+
+class DreamSimScorer:
+    def __init__(self, device="cuda"):
+        self.device = device
+        # 初始化 DreamSim 模型
+        self.model, _ = dreamsim(pretrained=True, device=self.device)
+        self.img_size = 224
+        self.transform = transforms.Compose([
+            transforms.Resize((self.img_size, self.img_size), 
+                              interpolation=transforms.InterpolationMode.BICUBIC),
+            transforms.ToTensor()
+        ])
+
+    def preprocess(self, img):
+        """将 PIL Image 转换为 DreamSim 输入张量"""
+        if isinstance(img, str):
+            img = Image.open(img)
+        img = img.convert('RGB')
+        return self.transform(img).unsqueeze(0).to(self.device)
+
+    @torch.no_grad()
+    def get_distance(self, img_ref_tensor, img_cand):
+        """计算图片与参考张量的感知距离"""
+        cand_tensor = self.preprocess(img_cand)
+        return self.model(img_ref_tensor, cand_tensor).item()

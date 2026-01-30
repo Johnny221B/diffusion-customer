@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.optimize import minimize
 
 class ThompsonOptimizer:
     def __init__(self, dim_latent, prior_var=1.0):
@@ -38,3 +39,55 @@ class ThompsonOptimizer:
 
     def get_max_eigenvalue(self):
         return np.linalg.norm(self.sigma, ord=2)
+
+class LogisticThompsonOptimizer:
+    def __init__(self, dim_latent, prior_var=1.0, exploration_a=1.0):
+        self.dim_latent = dim_latent
+        self.d = dim_latent + 1 
+        self.mu_map = np.zeros(self.d) 
+        self.hessian = np.eye(self.d) / prior_var 
+        self.exploration_a = exploration_a 
+        self.history = []
+
+    def sample_theta(self):
+        # 使用拉普拉斯近似采样 [cite: 78, 192]
+        cov = self.exploration_a**2 * np.linalg.inv(self.hessian)
+        return np.random.multivariate_normal(self.mu_map, cov)
+
+    def solve_analytical_best(self, theta, R):
+        # 基于线性效用 U = x'theta 寻找最优 x [cite: 72]
+        gamma = theta[:self.dim_latent]
+        if np.linalg.norm(gamma) > 1e-9:
+            best_z = R * (gamma / np.linalg.norm(gamma))
+        else:
+            best_z = np.zeros(self.dim_latent)
+        # 价格效用 -alpha*p，权重 alpha>0 时选低价 50
+        best_p = 50.0 if theta[-1] > 0 else 200.0
+        return best_z.astype(np.float32), best_p
+
+    def add_comparison_data(self, delta_x, labels):
+        for y in labels:
+            self.history.append((delta_x, y))
+
+    def update_posterior(self):
+        if not self.history: return
+
+        # 寻找 MLE [cite: 79]
+        def neg_log_likelihood(theta):
+            loss = 0.5 * np.sum(theta**2) 
+            for dx, y in self.history:
+                v = np.dot(dx, theta)
+                # Clip 避免数值溢出
+                loss += (np.log(1 + np.exp(np.clip(v, -20, 20))) - y * v)
+            return loss
+
+        res = minimize(neg_log_likelihood, self.mu_map, method='L-BFGS-B')
+        self.mu_map = res.x
+
+        # 更新海森矩阵 Hessian [cite: 80, 52]
+        self.hessian = np.eye(self.d)
+        for dx, _ in self.history:
+            v = np.dot(dx, self.mu_map)
+            prob = 1.0 / (1.0 + np.exp(-np.clip(v, -20, 20)))
+            weight = prob * (1.0 - prob)
+            self.hessian += weight * np.outer(dx, dx)
