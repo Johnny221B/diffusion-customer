@@ -2,8 +2,8 @@
 # import torch
 # from diffusers import StableDiffusion3Pipeline
 
-# MODEL_DIR = "/home/linyuliu/jxmount/diffusion_custom/models/stabilityai/stable-diffusion-3.5-large"
-# OUT_DIR = "/home/linyuliu/jxmount/diffusion_custom/outputs/smoke"
+# MODEL_DIR = "/home/wan/guanting's/diffusion-customer/model/stabilityai/stable-diffusion-3.5-large"
+# OUT_DIR = "/home/wan/guanting's/diffusion-customer/outputs/smoke"
 # os.makedirs(OUT_DIR, exist_ok=True)
 
 # def main():
@@ -40,12 +40,14 @@ import os
 from diffusers import StableDiffusion3Pipeline
 
 # 参考你的路径配置
-MODEL_DIR = "/home/linyuliu/jxmount/diffusion_custom/models/stabilityai/stable-diffusion-3.5-large"
-OUT_DIR = "/home/linyuliu/jxmount/diffusion_custom/outputs/stability_test"
+MODEL_DIR = "/home/wan/guanting's/diffusion-customer/model/stabilityai/stable-diffusion-3.5-large"
+OUT_DIR = "/home/wan/guanting's/diffusion-customer/outputs/stability_test"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 def test_token_embedding_stability():
-    pipe = StableDiffusion3Pipeline.from_pretrained(MODEL_DIR, torch_dtype=torch.float16).to("cuda")
+    pipe = StableDiffusion3Pipeline.from_pretrained(MODEL_DIR, torch_dtype=torch.float16)
+    # Reduce VRAM pressure for large SD3.5 models.
+    pipe.enable_model_cpu_offload()
     
     prompt = "product photo of a modern sneaker, high detail"
     

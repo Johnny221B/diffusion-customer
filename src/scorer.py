@@ -43,3 +43,29 @@ class ToyRedScorer:
         # 红色相对强度：r - (g+b)/2
         score = float((r - 0.5 * (g + b)).mean())
         return score
+
+class CLIPImageScorer:
+    """
+    Returns cosine similarity between two image embeddings.
+    Higher = more similar.
+    """
+    def __init__(self, model_name: str = "openai/clip-vit-base-patch32", device: str = "cpu"):
+        self.device = device
+        self.model = CLIPModel.from_pretrained(model_name, use_safetensors=True).to(device)
+        self.processor = CLIPProcessor.from_pretrained(model_name)
+        self.model.eval()
+
+    @torch.inference_mode()
+    def __call__(self, img: Image.Image, ref_img: Image.Image) -> float:
+        inputs = self.processor(images=[img, ref_img], return_tensors="pt")
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+
+        outputs = self.model(**inputs)
+        img_emb = outputs.image_embeds[0]
+        ref_emb = outputs.image_embeds[1]
+
+        img_emb = img_emb / img_emb.norm(dim=-1, keepdim=True)
+        ref_emb = ref_emb / ref_emb.norm(dim=-1, keepdim=True)
+
+        score = (img_emb * ref_emb).sum(dim=-1).item()
+        return float(score)

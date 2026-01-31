@@ -18,8 +18,8 @@ def parse_args():
     parser.add_argument("--update_every", type=int, default=5)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--explore_r", type=float, default=0.5)
-    parser.add_argument("--model_dir", type=str, default="/home/linyuliu/jxmount/diffusion_custom/models/stabilityai/stable-diffusion-3.5-large")
-    parser.add_argument("--output_root", type=str, default="/home/linyuliu/jxmount/diffusion_custom/outputs")
+    parser.add_argument("--model_dir", type=str, default="/home/wan/guanting's/diffusion-customer/model/stabilityai/stable-diffusion-3.5-large")
+    parser.add_argument("--output_root", type=str, default="/home/wan/guanting's/diffusion-customer/outputs")
     return parser.parse_args()
 
 def main():

@@ -12,10 +12,10 @@ from src.scorer import CLIPScorer
 # -------------------------
 # Paths / Config
 # -------------------------
-BASE_DIR = "/home/linyuliu/jxmount/diffusion_custom/models/stabilityai/stable-diffusion-3.5-large"
-CN_DIR   = "/home/linyuliu/jxmount/diffusion_custom/models/controlnets/sd35_large_controlnet_canny"
-REF_IMG_PATH = "/home/linyuliu/jxmount/diffusion_custom/assets/ref.png"
-OUT_DIR  = "/home/linyuliu/jxmount/diffusion_custom/outputs/bo_latent_rembo_continuous_512_clip_hp"
+BASE_DIR = "/home/wan/guanting's/diffusion-customer/model/stabilityai/stable-diffusion-3.5-large"
+CN_DIR   = "/home/wan/guanting's/diffusion-customer/model/controlnets/sd35_large_controlnet_canny"
+REF_IMG_PATH = "/home/wan/guanting's/diffusion-customer/assets/ref.png"
+OUT_DIR  = "/home/wan/guanting's/diffusion-customer/outputs/bo_latent_rembo_continuous_512_clip_hp"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 PROMPT = "product photo of a modern sneaker, studio lighting, white background, high detail"

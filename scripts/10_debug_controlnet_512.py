@@ -10,10 +10,10 @@ from src.edge_utils import make_canny_edge
 # -------------------------
 # Paths / Config
 # -------------------------
-BASE_DIR = "/home/linyuliu/jxmount/diffusion_custom/models/stabilityai/stable-diffusion-3.5-large"
-CN_DIR   = "/home/linyuliu/jxmount/diffusion_custom/models/controlnets/sd35_large_controlnet_canny"
-REF_IMG_PATH = "/home/linyuliu/jxmount/diffusion_custom/assets/ref.png"
-OUT_DIR  = "/home/linyuliu/jxmount/diffusion_custom/outputs/debug_512_controlnet_2gpu"
+BASE_DIR = "/home/wan/guanting's/diffusion-customer/model/stabilityai/stable-diffusion-3.5-large"
+CN_DIR   = "/home/wan/guanting's/diffusion-customer/model/controlnets/sd35_large_controlnet_canny"
+REF_IMG_PATH = "/home/wan/guanting's/diffusion-customer/assets/ref.png"
+OUT_DIR  = "/home/wan/guanting's/diffusion-customer/outputs/debug_512_controlnet_2gpu"
 
 PROMPT = "product photo of a modern sneaker, studio lighting, white background, high detail"
 NEG    = "lowres, blurry, worst quality, artifacts"
@@ -27,8 +27,8 @@ SEED = 123456
 DTYPE = torch.float16
 
 # 手动指定两张卡
-BASE_DEVICE = "cuda:0"
-CN_DEVICE   = "cuda:1"
+BASE_DEVICE = "cuda"
+CN_DEVICE   = "cuda"
 
 
 def save_img(img: Image.Image, path: str):
@@ -55,9 +55,10 @@ def main():
     base = StableDiffusion3Pipeline.from_pretrained(
         BASE_DIR,
         torch_dtype=DTYPE,
-    ).to(BASE_DEVICE)
+    )
+    base.enable_model_cpu_offload()
 
-    gen0 = torch.Generator(device=BASE_DEVICE).manual_seed(SEED)
+    gen0 = torch.Generator(device="cuda").manual_seed(SEED)
     print("[1] Generating base image (no ControlNet) ...")
     img_base = base(
         prompt=PROMPT,
@@ -82,17 +83,18 @@ def main():
     controlnet = SD3ControlNetModel.from_pretrained(
         CN_DIR,
         torch_dtype=DTYPE,
-    ).to(CN_DEVICE)
+    )
 
     print(f"[2] Loading ControlNet pipeline on {CN_DEVICE} ...")
     pipe = StableDiffusion3ControlNetPipeline.from_pretrained(
         BASE_DIR,
         controlnet=controlnet,
         torch_dtype=DTYPE,
-    ).to(CN_DEVICE)
+    )
+    pipe.enable_model_cpu_offload()
 
     def run_control(scale: float, tag: str):
-        gen1 = torch.Generator(device=CN_DEVICE).manual_seed(SEED)
+        gen1 = torch.Generator(device="cuda").manual_seed(SEED)
         print(f"[2] Generating ControlNet image: {tag}, scale={scale} ...")
         img = pipe(
             prompt=PROMPT,

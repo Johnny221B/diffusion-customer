@@ -4,7 +4,7 @@
 # # 常见写法：SD 3.5 Large 的官方仓库通常在 stabilityai 名下
 # repo_id = "stabilityai/stable-diffusion-3.5-large"   # 如果你看到的repo名不一样，就用你实际的那个
 
-# local_dir = "/home/linyuliu/jxmount/diffusion_custom/models/stabilityai/stable-diffusion-3.5-large"
+# local_dir = "/home/wan/guanting's/diffusion-customer/model/stabilityai/stable-diffusion-3.5-large"
 
 # snapshot_download(
 #     repo_id=repo_id,
@@ -20,7 +20,7 @@ import os
 from huggingface_hub import snapshot_download
 
 repo_id = "stabilityai/stable-diffusion-3.5-large-controlnet-canny"
-local_dir = "/home/linyuliu/jxmount/diffusion_custom/models/controlnets/sd35_large_controlnet_canny"
+local_dir = "/home/wan/guanting's/diffusion-customer/model/controlnets/sd35_large_controlnet_canny"
 
 snapshot_download(
     repo_id=repo_id,

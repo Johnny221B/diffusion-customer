@@ -2,8 +2,8 @@ import os
 import torch
 from diffusers import StableDiffusion3Pipeline
 
-BASE_DIR = "/home/linyuliu/jxmount/diffusion_custom/models/stabilityai/stable-diffusion-3.5-large"
-OUT_PATH = "/home/linyuliu/jxmount/diffusion_custom/assets/ref.png"
+BASE_DIR = "/home/wan/guanting's/diffusion-customer/model/stabilityai/stable-diffusion-3.5-large"
+OUT_PATH = "/home/wan/guanting's/diffusion-customer/assets/ref.png"
 
 def main():
     os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)

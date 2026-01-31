@@ -3,8 +3,8 @@ from PIL import Image
 from diffusers import StableDiffusion3ControlNetPipeline
 from diffusers.models.controlnets import SD3ControlNetModel
 
-BASE_DIR = "/home/linyuliu/jxmount/diffusion_custom/models/stabilityai/stable-diffusion-3.5-large"
-CN_DIR = "/home/linyuliu/jxmount/diffusion_custom/models/controlnets/sd35_large_controlnet_canny"
+BASE_DIR = "/home/wan/guanting's/diffusion-customer/model/stabilityai/stable-diffusion-3.5-large"
+CN_DIR = "/home/wan/guanting's/diffusion-customer/model/controlnets/sd35_large_controlnet_canny"
 
 controlnet = SD3ControlNetModel.from_pretrained(CN_DIR, torch_dtype=torch.float16)
 pipe = StableDiffusion3ControlNetPipeline.from_pretrained(

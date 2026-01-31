@@ -11,10 +11,10 @@ from src.sd35_controlnet_generator import SD35ControlNetGenerator
 from src.edge_utils import make_canny_edge
 from src.scorer import ToyRedScorer
 
-BASE_DIR = "/home/linyuliu/jxmount/diffusion_custom/models/stabilityai/stable-diffusion-3.5-large"
-CN_DIR   = "/home/linyuliu/jxmount/diffusion_custom/models/controlnets/sd35_large_controlnet_canny"
-OUT_DIR  = "/home/linyuliu/jxmount/diffusion_custom/outputs/bo_latent_rembo_512"
-REF_IMG_PATH = "/home/linyuliu/jxmount/diffusion_custom/assets/ref.png"
+BASE_DIR = "/home/wan/guanting's/diffusion-customer/model/stabilityai/stable-diffusion-3.5-large"
+CN_DIR   = "/home/wan/guanting's/diffusion-customer/model/controlnets/sd35_large_controlnet_canny"
+OUT_DIR  = "/home/wan/guanting's/diffusion-customer/outputs/bo_latent_rembo_512"
+REF_IMG_PATH = "/home/wan/guanting's/diffusion-customer/assets/ref.png"
 
 os.makedirs(OUT_DIR, exist_ok=True)
 

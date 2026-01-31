@@ -5,8 +5,8 @@ from src.sd35_embedding_generator import SD35EmbeddingGenerator
 from src.thompson_optimizer import ThompsonOptimizer
 from src.scorer import CLIPScorer
 
-MODEL_DIR = "/home/linyuliu/jxmount/diffusion_custom/models/stabilityai/stable-diffusion-3.5-large"
-OUT_DIR = "/home/linyuliu/jxmount/diffusion_custom/outputs/thompson_toy_v5"
+MODEL_DIR = "/home/wan/guanting's/diffusion-customer/model/stabilityai/stable-diffusion-3.5-large"
+OUT_DIR = "/home/wan/guanting's/diffusion-customer/outputs/thompson_toy_v5"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 def map_s_to_prompt(s):

@@ -20,8 +20,8 @@ def parse_args():
     parser.add_argument("--r_end", type=float, default=0.4)
     parser.add_argument("--update_every", type=int, default=5)
     parser.add_argument("--batch_size", type=int, default=8)
-    parser.add_argument("--model_dir", type=str, default="/home/linyuliu/jxmount/diffusion_custom/models/stabilityai/stable-diffusion-3.5-large")
-    parser.add_argument("--output_root", type=str, default="/home/linyuliu/jxmount/diffusion_custom/outputs")
+    parser.add_argument("--model_dir", type=str, default="/home/wan/guanting's/diffusion-customer/model/stabilityai/stable-diffusion-3.5-large")
+    parser.add_argument("--output_root", type=str, default="/home/wan/guanting's/diffusion-customer/outputs")
     return parser.parse_args()
 
 def main():
@@ -36,7 +36,7 @@ def main():
     W = W / np.linalg.norm(W, axis=0) 
 
     gen = SD35EmbeddingGenerator(args.model_dir)
-    scorer = CLIPScorer(device="cuda")
+    scorer = CLIPScorer(device="cpu")
     
     # --- 修复位置：确保参数名与类定义一致 ---
     opt = ThompsonOptimizer(dim_latent=args.dim_latent)

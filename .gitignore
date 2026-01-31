@@ -4,3 +4,6 @@ dreamsim/**
 
 !models/.gitkeep
 !outputs/.gitkeep
+model/**
+__pycache__/
+*.pyc

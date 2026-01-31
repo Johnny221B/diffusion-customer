@@ -15,12 +15,12 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, PROJECT_ROOT)
 
 
-BASE_DIR = "/home/linyuliu/jxmount/diffusion_custom/models/stabilityai/stable-diffusion-3.5-large"
-CN_DIR   = "/home/linyuliu/jxmount/diffusion_custom/models/controlnets/sd35_large_controlnet_canny"
-OUT_DIR  = "/home/linyuliu/jxmount/diffusion_custom/outputs/bo_run"
+BASE_DIR = "/home/wan/guanting's/diffusion-customer/model/stabilityai/stable-diffusion-3.5-large"
+CN_DIR   = "/home/wan/guanting's/diffusion-customer/model/controlnets/sd35_large_controlnet_canny"
+OUT_DIR  = "/home/wan/guanting's/diffusion-customer/outputs/bo_run"
 os.makedirs(OUT_DIR, exist_ok=True)
 
-REF_IMG_PATH = "/home/linyuliu/jxmount/diffusion_custom/assets/ref.png"  # 改成你自己的参考鞋图路径
+REF_IMG_PATH = "/home/wan/guanting's/diffusion-customer/assets/ref.png"  # 改成你自己的参考鞋图路径
 
 
 def ucb(mu: np.ndarray, sigma: np.ndarray, beta: float) -> np.ndarray:

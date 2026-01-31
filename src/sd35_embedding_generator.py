@@ -5,8 +5,13 @@ class SD35EmbeddingGenerator:
     def __init__(self, model_dir, device="cuda", torch_dtype=torch.float16):
         self.pipe = StableDiffusion3Pipeline.from_pretrained(
             model_dir, torch_dtype=torch_dtype
-        ).to(device)
+        )
         self.device = device
+        if device == "cuda":
+            # Reduce VRAM pressure for large SD3.5 models
+            self.pipe.enable_model_cpu_offload()
+        else:
+            self.pipe.to(device)
 
     @torch.no_grad()
     def encode_sandwich(self, prefix, suffix, z_vector):
