@@ -1,3 +1,4 @@
+# scripts/16_run_market_share.py
 import os
 import argparse
 import torch
@@ -30,7 +31,8 @@ def main():
     # target_prompt = "Left-facing profile of one sneaker, centered, solid white background, no logos."
     # target_prompt = "A professional photo of a centered sneaker, no brand logos, clean white background"
     # target_prompt = "A photo of a centered and left-facing sneaker, no brand logos, clean white background"
-    target_prompt = "Left-facing profile of one single sneaker, centered in frame, no brand logos, clean white background"
+    # target_prompt = "Left-facing profile of one single sneaker, centered in frame, no brand logos, clean white background"
+    target_prompt = "A single athletic shoe, side profile facing right, centered on clean white background, studio lighting, product photography, 8k, highly detailed, full shot"
 
     # --- 1. QR 正交化投影矩阵 W (4096 x 128) ---
     W_raw = np.random.randn(4096, 128).astype(np.float32)
