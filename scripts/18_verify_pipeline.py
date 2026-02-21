@@ -59,8 +59,10 @@ def main():
         z_comp = (comp_feat_raw.to(W_vis_torch.dtype) @ W_vis_torch).detach().cpu().float().numpy().flatten()
 
     # 4. 设定上帝视角权重并计算对齐截距 alpha
-    gamma_star = np.random.randn(128).astype(np.float32)
-    gamma_star /= np.linalg.norm(gamma_star)
+    # gamma_star = np.random.randn(128).astype(np.float32)
+    # gamma_star /= np.linalg.norm(gamma_star)
+    gamma_star = np.ones(128, dtype=np.float32)
+    gamma_star /= (np.linalg.norm(gamma_star) + 1e-9)
     
     # alpha = - gamma^T * z_comp
     alpha_true = - np.dot(gamma_star, z_comp)
@@ -82,7 +84,7 @@ def main():
         S_matrix = (active_tokens @ W_torch).T.detach().cpu().float().numpy()
         print(f">>> 动态检测到有效 Token 长度: {effective_len}, 已纳入正交空间。")
         
-    fixed_R = 5.0
+    fixed_R = 3.0
     current_share = 0.0
 
     # --- Phase 1: Cold Start (也执行垂直化操作) ---
