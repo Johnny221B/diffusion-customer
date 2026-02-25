@@ -117,10 +117,10 @@ def main():
 
         for b in range(10):
             intercept, theta_sampled = opt.sample_theta()
-            z_cand = opt.solve_analytical_best(theta_sampled, R=fixed_R, S_matrix=S_matrix)
+            z_cand = opt.solve_analytical_best(theta_sampled, R=fixed_R, S_matrix=S_matrix) # 128
             
             # 执行投影并生成
-            z_projected = W_torch @ torch.from_numpy(z_cand).to(device="cuda", dtype=torch.float16)
+            z_projected = W_torch @ torch.from_numpy(z_cand).to(device="cuda", dtype=torch.float16) # 4096
             embeds = gen.encode_simple_concat(target_prompt, z_projected)
             
             current_u = intercept + np.dot(theta_sampled, z_cand)

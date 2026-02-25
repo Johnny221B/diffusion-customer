@@ -1,53 +1,10 @@
-import numpy as np
-from scipy.optimize import minimize
-
-class ThompsonOptimizer:
-    def __init__(self, dim_latent, prior_var=1.0):
-        # 这里的参数名必须是 dim_latent
-        self.dim_latent = dim_latent
-        self.d = dim_latent + 1 
-        self.mu = np.zeros(self.d)
-        self.sigma = np.eye(self.d) * prior_var
-        self.X_buffer = []
-        self.y_buffer = []
-
-    def sample_theta(self):
-        return np.random.multivariate_normal(self.mu, self.sigma)
-
-    def solve_analytical_best(self, theta, R, price_range=(50, 200)):
-        gamma = theta[:self.dim_latent]
-        alpha = theta[-1]
-        if np.linalg.norm(gamma) > 1e-9:
-            best_z_latent = R * (gamma / np.linalg.norm(gamma))
-        else:
-            best_z_latent = np.zeros(self.dim_latent)
-        best_p = price_range[0] if alpha > 0 else price_range[1]
-        return best_z_latent.astype(np.float32), best_p
-
-    def add_to_buffer(self, x, outcome):
-        self.X_buffer.append(x)
-        self.y_buffer.append(outcome)
-
-    def update_from_buffer(self):
-        if not self.X_buffer: return
-        X_mat = np.array(self.X_buffer)
-        y_vec = np.array(self.y_buffer)
-        precision_post = np.eye(self.d) + X_mat.T @ X_mat
-        self.sigma = np.linalg.inv(precision_post)
-        self.mu = self.sigma @ (X_mat.T @ y_vec)
-        self.X_buffer, self.y_buffer = [], []
-
-    def get_max_eigenvalue(self):
-        return np.linalg.norm(self.sigma, ord=2)
-
-
-# \src\thompson_optimizer
 import time
 import numpy as np
 from scipy.optimize import minimize
+from scipy.linalg import solve_triangular
 
 class LogisticThompsonOptimizer:
-    def __init__(self, dim_latent=128, prior_var=3.0, exploration_a=1.0): #算utility的时候是在低纬度还是高维度算
+    def __init__(self, dim_latent=128, prior_var=3.0, exploration_a=1.0, max_samples=2000000): #算utility的时候是在低纬度还是高维度算
         self.dim_latent = dim_latent
         self.d = dim_latent + 1  # 1(Intercept) + 128(Feature)
         self.mu_map = np.zeros(self.d) 
@@ -57,10 +14,24 @@ class LogisticThompsonOptimizer:
         self.history = []
         self.history_prob = []
         self.eigenvalues = np.zeros(self.d)
+        
+        self.X_buffer = np.zeros((max_samples, self.d))
+        self.Y_buffer = np.zeros(max_samples)
+        self.sample_count = 0
+        
+        self._S_cache = None
+        self._gram_inv_cache = None
+        self.cov_base_cache = np.eye(self.d) * self.prior_var
+        
+    # def sample_theta(self):
+    #     H_reg = self.hessian + 1e-4 * np.eye(self.d)
+    #     cov = (self.exploration_a)**2 * np.linalg.inv(H_reg) # theta ~ N(theta, a^2 H_t^-1)
+    #     theta_full = np.random.multivariate_normal(self.mu_map, cov)
+    #     return theta_full[0], theta_full[1:]
 
     def sample_theta(self):
-        H_reg = self.hessian + 1e-4 * np.eye(self.d)
-        cov = (self.exploration_a)**2 * np.linalg.inv(H_reg) # theta ~ N(theta, a^2 H_t^-1)
+        # cov = a^2 * (H + reg)^-1
+        cov = (self.exploration_a**2) * self.cov_base_cache
         theta_full = np.random.multivariate_normal(self.mu_map, cov)
         return theta_full[0], theta_full[1:]
 
@@ -69,12 +40,18 @@ class LogisticThompsonOptimizer:
         z_raw = R * (theta_v / norm_theta) if norm_theta > 1e-9 else np.zeros(self.dim_latent)
 
         if S_matrix is not None and S_matrix.shape[1] > 0:
-            S = S_matrix
-            # P = I - S(S'S)^-1 S'
-            gram = S.T @ S
-            gram_inv = np.linalg.inv(gram + 1e-6 * np.eye(gram.shape[0]))
-            coeffs = (z_raw @ S) @ gram_inv
-            z_proj = S @ coeffs
+            if self._S_cache is None or not np.array_equal(S_matrix, self._S_cache):
+                S = S_matrix
+                gram = S.T @ S
+                # 这一步是 O(k^3)，在 Batch 循环中只需做一次
+                self._gram_inv_cache = np.linalg.inv(gram + 1e-6 * np.eye(gram.shape[0]))
+                self._S_cache = S_matrix.copy()
+            # S = S_matrix
+            # # P = I - S(S'S)^-1 S'
+            # gram = S.T @ S
+            # gram_inv = np.linalg.inv(gram + 1e-6 * np.eye(gram.shape[0]))
+            coeffs = (z_raw @ S_matrix) @ self._gram_inv_cache
+            z_proj = S_matrix @ coeffs
             z_perp = z_raw - z_proj
             
             if np.linalg.norm(z_perp) > 1e-9:
@@ -82,20 +59,40 @@ class LogisticThompsonOptimizer:
             return z_perp.astype(np.float32)
         return z_raw.astype(np.float32)
 
+    # def add_comparison_data(self, v_vector, label):
+    #     """确保 label 以数值形式存储"""
+    #     x = np.concatenate(([1.0], v_vector))
+    #     # 如果传入的是 [y]，则提取 y
+    #     clean_label = label[0] if isinstance(label, (list, np.ndarray)) else label
+    #     self.history.append((x, float(clean_label)))
+        
     def add_comparison_data(self, v_vector, label):
-        """确保 label 以数值形式存储"""
-        x = np.concatenate(([1.0], v_vector))
-        # 如果传入的是 [y]，则提取 y
+        # 构建样本向量 [1.0, z1, z2, ..., z128]
+        self.X_buffer[self.sample_count, 0] = 1.0
+        self.X_buffer[self.sample_count, 1:] = v_vector
+        
+        # 提取标签
         clean_label = label[0] if isinstance(label, (list, np.ndarray)) else label
-        self.history.append((x, float(clean_label)))
+        self.Y_buffer[self.sample_count] = float(clean_label)
+        
+        # 兼容原有历史记录
+        self.history.append((self.X_buffer[self.sample_count].copy(), self.Y_buffer[self.sample_count]))
+        
+        self.sample_count += 1
         
     def update_posterior(self):
-        if not self.history: return
-        # t_start = time.time()
+        # if not self.history: return
+        # # t_start = time.time()
     
-        # 1. 预处理：一次性将 history 转换为矩阵，避免在 neg_log_likelihood 内部循环
-        X = np.array([item[0] for item in self.history]) # (N, 128)
-        Y = np.array([item[1][0] if isinstance(item[1], (list, np.ndarray)) else item[1] for item in self.history]) # (N,)
+        # # 1. 预处理：一次性将 history 转换为矩阵，避免在 neg_log_likelihood 内部循环
+        # X = np.array([item[0] for item in self.history]) # (N, 128)
+        # Y = np.array([item[1][0] if isinstance(item[1], (list, np.ndarray)) else item[1] for item in self.history]) # (N,)
+        
+        if self.sample_count == 0: return
+        
+        # --- 核心优化：利用 Buffer 切片，无内存拷贝 ---
+        X = self.X_buffer[:self.sample_count]
+        Y = self.Y_buffer[:self.sample_count]
         
         # 2. 向量化的损失函数
         def neg_log_likelihood(theta):
@@ -122,16 +119,17 @@ class LogisticThompsonOptimizer:
         # t_map_solve = time.time() - t1
 
         # 4. 向量化构建 Hessian
-        # t2 = time.time()
+        #t2 = time.time()
         v = X @ self.mu_map
         prob = 1.0 / (1.0 + np.exp(-np.clip(v, -20, 20)))
         weights = prob * (1.0 - prob)
         # 使用矩阵乘法构建: X.T @ diag(weights) @ X
         self.hessian = (X.T * weights) @ X + np.eye(self.d) / self.prior_var
+        self.cov_base_cache = np.linalg.inv(self.hessian + 1e-4 * np.eye(self.d))
         # t_hessian_build = time.time() - t2
 
         # t3 = time.time()
-        self.eigenvalues = np.linalg.eigvalsh(self.hessian)
+        # self.eigenvalues = np.linalg.eigvalsh(self.hessian)
         # t_eigen_calc = time.time() - t3
         
         # print(f"\n[Optimized Profile] Epoch Total: {time.time()-t_start:.4f}s")
@@ -306,3 +304,46 @@ class LogisticThompsonOptimizer:
 #             prob = 1.0 / (1.0 + np.exp(-np.clip(v, -20, 20)))
 #             weight = prob * (1.0 - prob)
 #             self.hessian += weight * np.outer(dx, dx)
+
+
+import numpy as np
+from scipy.optimize import minimize
+
+class ThompsonOptimizer:
+    def __init__(self, dim_latent, prior_var=1.0):
+        # 这里的参数名必须是 dim_latent
+        self.dim_latent = dim_latent
+        self.d = dim_latent + 1 
+        self.mu = np.zeros(self.d)
+        self.sigma = np.eye(self.d) * prior_var
+        self.X_buffer = []
+        self.y_buffer = []
+
+    def sample_theta(self):
+        return np.random.multivariate_normal(self.mu, self.sigma)
+
+    def solve_analytical_best(self, theta, R, price_range=(50, 200)):
+        gamma = theta[:self.dim_latent]
+        alpha = theta[-1]
+        if np.linalg.norm(gamma) > 1e-9:
+            best_z_latent = R * (gamma / np.linalg.norm(gamma))
+        else:
+            best_z_latent = np.zeros(self.dim_latent)
+        best_p = price_range[0] if alpha > 0 else price_range[1]
+        return best_z_latent.astype(np.float32), best_p
+
+    def add_to_buffer(self, x, outcome):
+        self.X_buffer.append(x)
+        self.y_buffer.append(outcome)
+
+    def update_from_buffer(self):
+        if not self.X_buffer: return
+        X_mat = np.array(self.X_buffer)
+        y_vec = np.array(self.y_buffer)
+        precision_post = np.eye(self.d) + X_mat.T @ X_mat
+        self.sigma = np.linalg.inv(precision_post)
+        self.mu = self.sigma @ (X_mat.T @ y_vec)
+        self.X_buffer, self.y_buffer = [], []
+
+    def get_max_eigenvalue(self):
+        return np.linalg.norm(self.sigma, ord=2)

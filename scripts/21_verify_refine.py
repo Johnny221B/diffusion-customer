@@ -32,7 +32,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ref_image", type=str, required=True)
     parser.add_argument("--comp_image", type=str, required=True)
-    parser.add_argument("--num_epochs", type=int, default=60000)
+    parser.add_argument("--num_epochs", type=int, default=50000)
     parser.add_argument("--cold_start", type=int, default=5)
     parser.add_argument("--R", type=float, default=5.0)
     args = parser.parse_args()
@@ -75,8 +75,9 @@ def main():
     # --- 2) define ground-truth theta*: gamma_star is all-ones direction, then normalize theta to unit norm ---
     gamma_star = np.ones(128, dtype=np.float32)
     gamma_star /= (np.linalg.norm(gamma_star) + 1e-9)  # unit direction
+    offset = 2.5
 
-    alpha_true = - float(np.dot(gamma_star, z_comp))    # competitor on decision boundary (raw)
+    alpha_true = - float(np.dot(gamma_star, z_comp)) - offset   # competitor on decision boundary (raw)
 
     true_theta_raw = np.concatenate(([alpha_true], gamma_star)).astype(np.float32)
 
@@ -108,6 +109,7 @@ def main():
         print(f">>> Effective token length: {effective_len}. S_matrix shape: {S_matrix.shape}")
 
     fixed_R = float(args.R)  # e.g., 5.0 (faster) or 3.0 (smoother)
+    batch = 20
 
     # --- 4) compute oracle share (best possible under same constraints) ---
     gamma_perp = project_orthogonal(gamma_star.copy(), S_matrix)
@@ -120,21 +122,21 @@ def main():
     print(f">>> prob_best (oracle): {prob_best:.4f}")
 
     # --- Phase 1: Cold Start ---
-    print(">>> Cold start (128D prompt-orthogonal exploration)...")
-    cold_start_count = 0
-    labels_collected = set()
+    # print(">>> Cold start (128D prompt-orthogonal exploration)...")
+    # cold_start_count = 0
+    # labels_collected = set()
 
-    while cold_start_count < args.cold_start or len(labels_collected) < 2:
-        z_latent_raw = np.random.normal(0, 1.0, 128).astype(np.float32)
-        z_latent = opt.solve_analytical_best(z_latent_raw, R=fixed_R, S_matrix=S_matrix)
+    # while cold_start_count < args.cold_start or len(labels_collected) < 2:
+    #     z_latent_raw = np.random.normal(0, 1.0, 128).astype(np.float32)
+    #     z_latent = opt.solve_analytical_best(z_latent_raw, R=fixed_R, S_matrix=S_matrix)
 
-        # hard-threshold label for early diversity
-        y = 1 if (np.dot(z_latent, gamma_star) + alpha_true) > 0 else 0
-        opt.add_comparison_data(z_latent, y)
-        labels_collected.add(y)
-        cold_start_count += 1
+    #     # hard-threshold label for early diversity
+    #     y = 1 if (np.dot(z_latent, gamma_star) + alpha_true) > 0 else 0
+    #     opt.add_comparison_data(z_latent, y)
+    #     labels_collected.add(y)
+    #     cold_start_count += 1
 
-    print(f">>> Cold start done: {cold_start_count} samples. Labels: {labels_collected}")
+    # print(f">>> Cold start done: {cold_start_count} samples. Labels: {labels_collected}")
     opt.update_posterior()
 
     # --- Phase 2: Thompson Sampling ---
@@ -150,8 +152,9 @@ def main():
         batch_raw_labels = []
         batch_best_labels = []
         batch_z_list = []
+        batch_probs = []
 
-        for b in range(10):
+        for b in range(batch):
             intercept, theta_sampled = opt.sample_theta()
             z_cand = opt.solve_analytical_best(theta_sampled, R=fixed_R, S_matrix=S_matrix)
 
@@ -161,15 +164,33 @@ def main():
             u = np.random.rand()               # 同一个随机数
             y_raw = 1 if u < prob else 0       # 当前策略的标签
             y_oracle = 1 if u < prob_best else 0  # oracle 标签（同一个 u）
+            
+            # if epoch == 1:
+            #     z_projected = W_torch @ torch.from_numpy(z_cand).to(device="cuda", dtype=torch.float16)
+            #     embeds = gen.encode_simple_concat(target_prompt, z_projected)
+            #     img = gen.generate(embeds,seed=42+b)
+            #     first_epoch_dir = os.path.join(run_dir, "epoch_001_all")
+            #     os.makedirs(first_epoch_dir, exist_ok=True)
+            #     img.save(os.path.join(first_epoch_dir, f"sample_{b:02d}_score{v_score:.3f}.png"))
+            
+            # if epoch == 500:
+            #     z_projected = W_torch @ torch.from_numpy(z_cand).to(device="cuda", dtype=torch.float16)
+            #     embeds = gen.encode_simple_concat(target_prompt, z_projected)
+            #     img = gen.generate(embeds,seed=42+b)
+            #     first_epoch_dir = os.path.join(run_dir, "epoch_500_all")
+            #     os.makedirs(first_epoch_dir, exist_ok=True)
+            #     img.save(os.path.join(first_epoch_dir, f"sample_{b:02d}_score{v_score:.3f}.png"))
 
             batch_raw_labels.append(y_raw)
             batch_best_labels.append(y_oracle)
             batch_z_list.append(z_cand)
+            batch_probs.append(prob)
 
-        running_share.append(np.mean(batch_raw_labels))
+        # running_share.append(np.mean(batch_raw_labels))
+        running_share.append(np.mean(batch_probs))
         running_best_share.append(np.mean(batch_best_labels))
 
-        for b in range(10):
+        for b in range(batch):
             opt.add_comparison_data(batch_z_list[b], [batch_raw_labels[b]])
 
         opt.update_posterior()
@@ -188,7 +209,8 @@ def main():
             norm_mse = float(np.mean((mu_normed - theta_normed) ** 2))
 
             avg_share = float(np.mean(running_share))
-            oracle_share = float(np.mean(running_best_share))
+            # oracle_share = float(np.mean(running_best_share))
+            oracle_share = prob_best
             regret = float(oracle_share - avg_share)
 
             print(f"Epoch {epoch:05d} | Avg Share: {avg_share*100:5.1f}% | "
