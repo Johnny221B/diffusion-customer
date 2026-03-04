@@ -75,22 +75,24 @@ def main():
     # --- 2) define ground-truth theta*: gamma_star is all-ones direction, then normalize theta to unit norm ---
     gamma_star = np.ones(128, dtype=np.float32)
     gamma_star /= (np.linalg.norm(gamma_star) + 1e-9)  # unit direction
-    offset = 2.5
+    offset = 3.5
 
     alpha_true = - float(np.dot(gamma_star, z_comp)) - offset   # competitor on decision boundary (raw)
 
     true_theta_raw = np.concatenate(([alpha_true], gamma_star)).astype(np.float32)
 
     # normalize the whole theta to unit norm
-    theta_norm = float(np.linalg.norm(true_theta_raw) + 1e-9)
-    true_theta = true_theta_raw / theta_norm
-
-    # IMPORTANT: keep labeling consistent with the normalized theta
-    alpha_true = float(true_theta[0])
-    gamma_star = true_theta[1:].astype(np.float32)
+    # theta_norm = float(np.linalg.norm(true_theta_raw) + 1e-9)
+    # true_theta = true_theta_raw / theta_norm
+    true_theta = true_theta_raw
+    # alpha_true = float(true_theta[0])
+    # gamma_star = true_theta[1:].astype(np.float32)
+    
+    alpha_true = float(true_theta_raw[0])
+    gamma_star = true_theta_raw[1:].astype(np.float32)
 
     print(f">>> Verify mode: gamma_star = ones (unit dir), theta* normalized to ||theta*||=1.")
-    print(f">>> alpha_true(after norm)={alpha_true:.6f}, ||gamma_star||={np.linalg.norm(gamma_star):.6f}")
+    # print(f">>> alpha_true(after norm)={alpha_true:.6f}, ||gamma_star||={np.linalg.norm(gamma_star):.6f}")
     print(f">>> ||z_comp||={np.linalg.norm(z_comp):.4f}")
     # >>> alpha_true(after norm)=-0.021914, ||gamma_star||=0.999760
     # >>> ||z_comp||=0.2384

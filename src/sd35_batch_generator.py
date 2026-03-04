@@ -15,42 +15,45 @@ class SD35BatchEmbeddingGenerator:
         ).to(self.device) # <--- 关键：确保移动到指定的卡
         
         self.pipe.set_progress_bar_config(disable=True)
+        self._prompt_cache = {}
 
     @torch.no_grad()
-    def encode_batch_concat(self, prompt, z_vectors_batch):
+    def encode_batch_concat(self, prompt, z_vectors_batch, negative_prompt=None):
         """
-        z_vectors_batch: (BS, 4096) 的 Tensor
+        z_vectors_batch: (BS, 4096) Tensor (CPU or GPU)
         """
         bs = z_vectors_batch.shape[0]
-        
-        # 1. 基础 Encoding (获取单份 Embedding)
-        out = self.pipe.encode_prompt(
-            prompt=prompt, prompt_2=prompt, prompt_3=prompt,
-            negative_prompt="logo, text, brand, blurry, low quality, multiples, pair,"
-        )
-        p_embeds, n_p_embeds, pooled, n_p_pooled = out
-        
-        # 2. 批量扩展与拼接 
-        # 将基础 embedding 复制 BS 份
-        p_embeds_batch = p_embeds.repeat(bs, 1, 1)    # (BS, L, 4096)
-        n_p_embeds_batch = n_p_embeds.repeat(bs, 1, 1) # (BS, L, 4096)
-        pooled_batch = pooled.repeat(bs, 1)           # (BS, 2048)
-        n_p_pooled_batch = n_p_pooled.repeat(bs, 1)   # (BS, 2048)
-        
-        # 准备注入的 z 向量 (BS, 1, 4096)
+        if negative_prompt is None:
+            negative_prompt = "logo, text, brand, blurry, low quality, multiples, pair,"
+
+        # ✅ 1) cache prompt encoding
+        cache_key = (prompt, negative_prompt)
+        if cache_key in self._prompt_cache:
+            p_embeds, n_p_embeds, pooled, n_p_pooled = self._prompt_cache[cache_key]
+        else:
+            out = self.pipe.encode_prompt(
+                prompt=prompt, prompt_2=prompt, prompt_3=prompt,
+                negative_prompt=negative_prompt
+            )
+            p_embeds, n_p_embeds, pooled, n_p_pooled = out
+            self._prompt_cache[cache_key] = (p_embeds, n_p_embeds, pooled, n_p_pooled)
+
+        # ✅ 2) expand 替代 repeat（避免真实复制）
+        # p_embeds shape: (1, L, 4096)  -> expand to (BS, L, 4096)
+        p_embeds_batch = p_embeds.expand(bs, -1, -1).contiguous()
+        n_p_embeds_batch = n_p_embeds.expand(bs, -1, -1).contiguous()
+        pooled_batch = pooled.expand(bs, -1).contiguous()
+        n_p_pooled_batch = n_p_pooled.expand(bs, -1).contiguous()
+
+        # z: (BS, 4096) -> (BS, 1, 4096)
         z_v = z_vectors_batch.unsqueeze(1).to(device=self.device, dtype=p_embeds.dtype)
-        
-        # 在 Token 序列维度 (dim=1) 拼接
+
         p_combined = torch.cat([p_embeds_batch, z_v], dim=1)
         n_combined = torch.cat([n_p_embeds_batch, torch.zeros_like(z_v)], dim=1)
-        
         return (p_combined, n_combined, pooled_batch, n_p_pooled_batch)
 
     @torch.inference_mode()
     def generate_batch(self, embeds_batch, seeds):
-        """
-        并行生成 25 张图
-        """
         p, n_p, pooled, n_p_pooled = embeds_batch
         # 准备批量 Generator
         generators = [torch.Generator(self.device).manual_seed(s) for s in seeds]
@@ -61,9 +64,9 @@ class SD35BatchEmbeddingGenerator:
             negative_prompt_embeds=n_p,
             pooled_prompt_embeds=pooled, 
             negative_pooled_prompt_embeds=n_p_pooled,
-            num_inference_steps=30, 
-            guidance_scale=7.5,
-            height=512, width=512, 
+            num_inference_steps=20, 
+            guidance_scale=4.5,
+            height=384, width=384, 
             generator=generators,
             output_type="pil"
         ).images
