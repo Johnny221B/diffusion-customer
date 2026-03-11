@@ -36,55 +36,116 @@
 
 # print("Saved:", "metrics_2x2.png")
 
+# import pandas as pd
+# import matplotlib.pyplot as plt
+
+# csv_path = "/home/linyuliu/jxmount/diffusion_custom/outputs/dist_v22_0306_0132/metrics.csv"
+# df = pd.read_csv(csv_path)
+
+# df["epoch"] = pd.to_numeric(df["epoch"], errors="coerce")
+# df = df.dropna(subset=["epoch"]).sort_values("epoch").reset_index(drop=True)
+
+# # 你每条记录是“每10个epoch一次”，所以 window=50 表示平滑 50条记录 = 500个epoch
+# window = 1
+
+# for col in ["share", "oracle_share", "regret"]:
+#     df[col + "_smooth"] = df[col].rolling(window=window, min_periods=1).mean()
+
+# fig, axes = plt.subplots(2, 2, figsize=(12, 8), sharex=True)
+# (ax1, ax2, ax3, ax4) = axes.flatten()
+
+# # share & oracle_share（原始=淡，平滑=粗）
+# ax1.plot(df["epoch"], df["share"], alpha=0.25, label="share (raw)")
+# ax1.plot(df["epoch"], df["share_smooth"], linewidth=2.0, label=f"share (roll{window})")
+# ax1.plot(df["epoch"], df["oracle_share"], alpha=0.25, label="oracle_share (raw)")
+# ax1.plot(df["epoch"], df["oracle_share_smooth"], linewidth=2.0, label=f"oracle_share (roll{window})")
+# ax1.set_title("share & oracle_share vs epoch")
+# ax1.set_xlabel("epoch"); ax1.set_ylabel("value")
+# ax1.legend()
+
+# # cos_sim（不平滑也行；如果你也想平滑，同样 rolling 一下即可）
+# ax2.plot(df["epoch"], df["cos_sim"])
+# ax2.set_title("cos_sim vs epoch")
+# ax2.set_xlabel("epoch"); ax2.set_ylabel("cos_sim")
+
+# # regret（原始+平滑）
+# ax3.plot(df["epoch"], df["regret"], alpha=0.25, label="regret (raw)")
+# ax3.plot(df["epoch"], df["regret_smooth"], linewidth=2.0, label=f"regret (roll{window})")
+# ax3.set_title("regret vs epoch")
+# ax3.set_xlabel("epoch"); ax3.set_ylabel("regret")
+# ax3.legend()
+
+# # norm_mse
+# ax4.plot(df["epoch"], df["norm_mse"])
+# ax4.set_title("norm_mse vs epoch")
+# ax4.set_xlabel("epoch"); ax4.set_ylabel("norm_mse")
+
+# fig.tight_layout()
+# # fig.savefig("metrics_R5_better.pdf")
+# fig.savefig("metrics_stable.pdf")
+
+# # fig.savefig("metrics_2x2_smoothed.png", dpi=200)
+# plt.show()
+
+# print("Saved: metrics_2x2_smoothed.pdf / .png")
+
 import pandas as pd
 import matplotlib.pyplot as plt
 
-csv_path = "/home/linyuliu/jxmount/diffusion_custom/outputs/conquest_v21_128d_0223_2144/metrics.csv"
+csv_path = "/home/linyuliu/jxmount/diffusion_custom/outputs/dist_v22_0306_0132/metrics.csv"
 df = pd.read_csv(csv_path)
 
+# 确保 epoch 是数值，并按 epoch 排序
 df["epoch"] = pd.to_numeric(df["epoch"], errors="coerce")
 df = df.dropna(subset=["epoch"]).sort_values("epoch").reset_index(drop=True)
 
-# 你每条记录是“每10个epoch一次”，所以 window=50 表示平滑 50条记录 = 500个epoch
+# 如果你每条记录对应一个 epoch，就按“记录数”做平滑
 window = 1
 
-for col in ["share", "oracle_share", "regret"]:
+# 需要平滑的列
+for col in ["share", "oracle_share", "regret", "avg_dist", "avg_utility"]:
     df[col + "_smooth"] = df[col].rolling(window=window, min_periods=1).mean()
 
 fig, axes = plt.subplots(2, 2, figsize=(12, 8), sharex=True)
 (ax1, ax2, ax3, ax4) = axes.flatten()
 
-# share & oracle_share（原始=淡，平滑=粗）
+# 1) share & oracle_share
 ax1.plot(df["epoch"], df["share"], alpha=0.25, label="share (raw)")
 ax1.plot(df["epoch"], df["share_smooth"], linewidth=2.0, label=f"share (roll{window})")
 ax1.plot(df["epoch"], df["oracle_share"], alpha=0.25, label="oracle_share (raw)")
 ax1.plot(df["epoch"], df["oracle_share_smooth"], linewidth=2.0, label=f"oracle_share (roll{window})")
 ax1.set_title("share & oracle_share vs epoch")
-ax1.set_xlabel("epoch"); ax1.set_ylabel("value")
+ax1.set_xlabel("epoch")
+ax1.set_ylabel("value")
 ax1.legend()
 
-# cos_sim（不平滑也行；如果你也想平滑，同样 rolling 一下即可）
-ax2.plot(df["epoch"], df["cos_sim"])
-ax2.set_title("cos_sim vs epoch")
-ax2.set_xlabel("epoch"); ax2.set_ylabel("cos_sim")
+# 2) avg_dist
+ax2.plot(df["epoch"], df["avg_dist"], alpha=0.25, label="avg_dist (raw)")
+ax2.plot(df["epoch"], df["avg_dist_smooth"], linewidth=2.0, label=f"avg_dist (roll{window})")
+ax2.set_title("avg_dist vs epoch")
+ax2.set_xlabel("epoch")
+ax2.set_ylabel("avg_dist")
+ax2.legend()
 
-# regret（原始+平滑）
+# 3) regret
 ax3.plot(df["epoch"], df["regret"], alpha=0.25, label="regret (raw)")
 ax3.plot(df["epoch"], df["regret_smooth"], linewidth=2.0, label=f"regret (roll{window})")
 ax3.set_title("regret vs epoch")
-ax3.set_xlabel("epoch"); ax3.set_ylabel("regret")
+ax3.set_xlabel("epoch")
+ax3.set_ylabel("regret")
 ax3.legend()
 
-# norm_mse
-ax4.plot(df["epoch"], df["norm_mse"])
-ax4.set_title("norm_mse vs epoch")
-ax4.set_xlabel("epoch"); ax4.set_ylabel("norm_mse")
+# 4) avg_utility
+ax4.plot(df["epoch"], df["avg_utility"], alpha=0.25, label="avg_utility (raw)")
+ax4.plot(df["epoch"], df["avg_utility_smooth"], linewidth=2.0, label=f"avg_utility (roll{window})")
+ax4.set_title("avg_utility vs epoch")
+ax4.set_xlabel("epoch")
+ax4.set_ylabel("avg_utility")
+ax4.legend()
 
 fig.tight_layout()
-# fig.savefig("metrics_R5_better.pdf")
 fig.savefig("metrics_stable.pdf")
-
-# fig.savefig("metrics_2x2_smoothed.png", dpi=200)
+fig.savefig("metrics_stable.png", dpi=200)
 plt.show()
 
-print("Saved: metrics_2x2_smoothed.pdf / .png")
+print("Saved: metrics_stable.pdf / .png")

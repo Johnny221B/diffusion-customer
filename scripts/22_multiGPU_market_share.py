@@ -12,17 +12,24 @@ from datetime import datetime
 from src.sd35_batch_generator import SD35BatchEmbeddingGenerator, SD35EmbeddingGenerator
 from src.thompson_optimizer import LogisticThompsonOptimizer
 from src.scorer import DreamSimScorer
+from src.seed_selector import select_seeds_by_clip
 # from diffusers import StableDiffusion35Pipeline
-
-# 强制使用 spawn 模式以适配 CUDA
+# 图片的embedding的norm
+# 图片风格差异增强
+# expection
+# hessian matrix min eigenvalue / condition number
 try:
     mp.set_start_method('spawn', force=True)
 except RuntimeError:
     pass
 
-def get_logistic_label(d_our, d_comp, sensitivity=1.0):
-    delta_d = d_comp - d_our 
+def get_logistic_prob(d_our, d_comp, sensitivity=1.0):
+    delta_d = d_comp - d_our
     prob = 1.0 / (1.0 + np.exp(-np.clip(sensitivity * delta_d, -20, 20)))
+    return float(prob)
+
+def get_logistic_label(d_our, d_comp, sensitivity=1.0):
+    prob = get_logistic_prob(d_our, d_comp, sensitivity)
     return 1 if np.random.rand() < prob else 0
 
 def worker_fn(rank, task_queue, result_queue, model_path, ref_image_path, dist_competitor):
@@ -44,28 +51,31 @@ def worker_fn(rank, task_queue, result_queue, model_path, ref_image_path, dist_c
         images = batch_gen.generate_batch(embeds_batch, seeds)
         
         y_list = [0] * len(images)
+        p_list = [0.0] * len(images)
         d_list = [0.0] * len(images)
 
         for i, img in enumerate(images):
             d_our = scorer.model(ref_tensor, scorer.preprocess(img)).item()
+            p = get_logistic_prob(d_our, dist_competitor, sensitivity)
             y = get_logistic_label(d_our, dist_competitor, sensitivity)
 
             if save_this_epoch_dir is not None:
                 img_name = f"rank{rank}_idx{int(idx_chunk[i])}_seed{seeds[i]}_dist{d_our:.4f}.png"
                 img.save(os.path.join(save_this_epoch_dir, img_name))
 
+            p_list[i] = float(p)
             y_list[i] = int(y)
             d_list[i] = float(d_our)
             img.close()
 
-        result_queue.put((idx_chunk, y_list, d_list))
+        result_queue.put((idx_chunk, y_list, d_list, p_list))
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ref_image", type=str, required=True)
     parser.add_argument("--comp_image", type=str, required=True)
     parser.add_argument("--model_path", type=str, required=True)
-    parser.add_argument("--num_epochs", type=int, default=150)
+    parser.add_argument("--num_epochs", type=int, default=1000)
     parser.add_argument("--batch_size", type=int, default=100) 
     parser.add_argument("--sensitivity", type=float, default=1.0)
     parser.add_argument("--cold_start", type=int, default=5)
@@ -75,9 +85,10 @@ def main():
     os.makedirs(run_dir, exist_ok=True)
     csv_path = os.path.join(run_dir, "metrics.csv")
     pd.DataFrame(columns=["epoch", "share", "avg_dist", "avg_utility", "oracle_share", "regret"]).to_csv(csv_path, index=False)
-    global_seeds = [42 + i for i in range(args.batch_size)]
+    # global_seeds = [42 + i for i in range(args.batch_size)]
     # target_prompt = "Side profile of an athletic shoe, facing left, no brand logos, centered on white plain background"
-    target_prompt = "Product photo of a single athletic shoe, side profile, facing left, centered, full shoe visible, on a plain white background"
+    # target_prompt = "Product photo of a single athletic shoe, side profile, facing left, centered, full shoe visible, on a plain white background"
+    target_prompt = "Product photo of a single athletic shoe, full shoe visible, side profile, facing left, centered on a plain white background"
 
     # --- Master 初始化 ---
     opt = LogisticThompsonOptimizer(dim_latent=128)
@@ -107,6 +118,16 @@ def main():
     print(f">>> Oracle share (theoretical upper bound): {oracle_share*100:.2f}%")
 
     # --- Phase 1: Cold Start (利用 temp_gen 快速初始化) ---
+    print(">>> seed select...")
+    global_seeds = select_seeds_by_clip(
+        temp_gen=temp_gen,
+        prompt=target_prompt,
+        run_dir=run_dir,
+        candidate_n=300,
+        top_k=args.batch_size,   # 100
+    )
+    print(f">>> Selected {len(global_seeds)} seeds for refinement.")
+    
     print(">>> 启动冷启动...")
     cold_start_count = 0
     labels_collected = set()
@@ -153,7 +174,7 @@ def main():
         mu_list = []
         
         save_this_epoch_dir = None
-        if epoch == 1 or epoch % 500 == 0:
+        if epoch == 1 or epoch % 50 == 0:
             save_this_epoch_dir = os.path.join(run_dir, f"epoch_{epoch:05d}")
             os.makedirs(save_this_epoch_dir, exist_ok=True)
             print(f">>> Epoch {epoch}: 开启图片保存模式，目录: {save_this_epoch_dir}")
@@ -191,10 +212,12 @@ def main():
         # 4. Gather：收集 4 卡结果
         y_buf = np.empty(args.batch_size, dtype=np.int64)
         d_buf = np.empty(args.batch_size, dtype=np.float32)
+        p_buf = np.empty(args.batch_size, dtype=np.float32)
         for _ in range(world_size):
             idx_chunk, y_list, d_list = result_queue.get()
             y_buf[idx_chunk] = np.array(y_list, dtype=np.int64)
             d_buf[idx_chunk] = np.array(d_list, dtype=np.float32)
+            p_buf[idx_chunk] = np.array(p_list, dtype=np.float32)
 
         epoch_utilities = np.empty(args.batch_size, dtype=np.float32)
         for idx in range(args.batch_size):
@@ -207,7 +230,8 @@ def main():
         
         current_share = float(y_buf.mean())
         current_dist  = float(d_buf.mean())
-        regret = float(oracle_share - current_share) 
+        current_exp_share = float(p_buf.mean()) 
+        regret = float(oracle_share - current_exp_share) 
         
         epoch_sec = float(time.time() - t0)
         print(f"epoch time:{epoch_sec:4.1f}")
@@ -226,6 +250,7 @@ def main():
             df.to_csv(csv_path, mode='a', index=False, header=False)
             print(
                 f"Epoch {epoch:05d} | Share: {df['share'].mean()*100:4.1f}% "
+                f"| ExpShare: {df['expectation_share'].mean()*100:4.1f}% "
                 f"| Oracle: {oracle_share*100:4.1f}% | Regret: {df['regret'].mean()*100:4.1f}% "
                 f"| Avg Dist: {df['avg_dist'].mean():.4f} | Utility: {current_utility:.4f}"
             )

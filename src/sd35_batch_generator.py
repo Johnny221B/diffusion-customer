@@ -24,7 +24,8 @@ class SD35BatchEmbeddingGenerator:
         """
         bs = z_vectors_batch.shape[0]
         if negative_prompt is None:
-            negative_prompt = "logo, text, brand, blurry, low quality, multiples, pair,"
+            # negative_prompt = "cropped, out of frame, cut off, close-up, zoomed in, off-center, corner, partial, multiple shoes, pair, logo, text, brand"
+            negative_prompt = "cropped, out of frame, close-up, off-center, cut off"
 
         # ✅ 1) cache prompt encoding
         cache_key = (prompt, negative_prompt)
@@ -79,42 +80,43 @@ class SD35EmbeddingGenerator:
         ).to(device)
         self.device = device
 
-    @torch.no_grad()
-    def encode_sandwich(self, prompt, z_vector):
-        """
-        Symmetric Sandwich: [Prompt_Slice, z, Prompt_Slice]
-        """
-        out = self.pipe.encode_prompt(
-            prompt=prompt, prompt_2=prompt, prompt_3=prompt,
-            negative_prompt="logo, text, brand, blurry, low quality, multiples, pair,"
-        )
-        p_embeds, n_p_embeds, pooled, n_p_pooled = out
+    # @torch.no_grad()
+    # def encode_sandwich(self, prompt, z_vector):
+    #     """
+    #     Symmetric Sandwich: [Prompt_Slice, z, Prompt_Slice]
+    #     """
+    #     out = self.pipe.encode_prompt(
+    #         prompt=prompt, prompt_2=prompt, prompt_3=prompt,
+    #         negative_prompt="cropped, out of frame, close-up, off-center, cut off"
+    #     )
+    #     p_embeds, n_p_embeds, pooled, n_p_pooled = out
         
-        z_vector = z_vector.to(device=self.device, dtype=p_embeds.dtype).view(1, 1, -1)
+    #     z_vector = z_vector.to(device=self.device, dtype=p_embeds.dtype).view(1, 1, -1)
         
-        # Slice to 30 tokens to ensure shape alignment
-        p_slice = p_embeds[:, :30, :]
-        n_slice = n_p_embeds[:, :30, :]
+    #     # Slice to 30 tokens to ensure shape alignment
+    #     p_slice = p_embeds[:, :30, :]
+    #     n_slice = n_p_embeds[:, :30, :]
         
-        # Build 30 + 1 + 30 = 61 token sequence
-        p_combined = torch.cat([p_slice, z_vector, p_slice], dim=1)
-        # Negative sequence must match shape exactly
-        n_combined = torch.cat([n_slice, torch.zeros_like(z_vector), n_slice], dim=1)
+    #     # Build 30 + 1 + 30 = 61 token sequence
+    #     p_combined = torch.cat([p_slice, z_vector, p_slice], dim=1)
+    #     # Negative sequence must match shape exactly
+    #     n_combined = torch.cat([n_slice, torch.zeros_like(z_vector), n_slice], dim=1)
         
-        return (p_combined, n_combined, pooled, n_p_pooled)
+    #     return (p_combined, n_combined, pooled, n_p_pooled)
     
     @torch.no_grad()
-    def encode_simple_concat(self, prompt, z_vector):
+    def encode_simple_concat(self, prompt, z_vector, negative_prompt=None):
         """
         将 z 直接拼接到完整 Prompt Embedding 的末尾
         """
+        if negative_prompt is None:
+            negative_prompt = "logo, text, brand, blurry, low quality, multiples, cropped, out of frame, close-up, off-center, cut off"
         out = self.pipe.encode_prompt(
             prompt=prompt, prompt_2=prompt, prompt_3=prompt,
-            negative_prompt="logo, text, brand, blurry, low quality, multiples, pair,"
+            negative_prompt=negative_prompt
         )
         p_embeds, n_p_embeds, pooled, n_p_pooled = out
         
-        # 确保维度匹配 (1, 1, 4096)
         z_v = z_vector.to(device=self.device, dtype=p_embeds.dtype).view(1, 1, -1)
         
         # 直接在 token 序列维度(dim=1)上拼接
@@ -130,6 +132,6 @@ class SD35EmbeddingGenerator:
         return self.pipe(
             prompt_embeds=p, negative_prompt_embeds=n_p,
             pooled_prompt_embeds=pooled, negative_pooled_prompt_embeds=n_p_pooled,
-            num_inference_steps=30, guidance_scale=7.5,
-            height=512, width=512, generator=generator
+            num_inference_steps=20, guidance_scale=4.5,
+            height=384, width=384, generator=generator
         ).images[0]
