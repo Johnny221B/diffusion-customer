@@ -4,24 +4,29 @@ from scipy.optimize import minimize
 from scipy.linalg import solve_triangular
 
 class LogisticThompsonOptimizer:
-    def __init__(self, dim_latent=128, prior_var=3.0, exploration_a=1.0, max_samples=2000000): #算utility的时候是在低纬度还是高维度算
+    def __init__(self, dim_latent=128, prior_var=3.0, exploration_a=1.0, max_samples=2000000, prior_mean=None):
         self.dim_latent = dim_latent
         self.d = dim_latent + 1  # 1(Intercept) + 128(Feature)
-        self.mu_map = np.zeros(self.d) 
         self.prior_var = prior_var
-        self.hessian = np.eye(self.d) / self.prior_var 
-        self.exploration_a = exploration_a 
+        self.prior_mean = prior_mean if prior_mean is not None else np.zeros(self.d)
+        self.mu_map = self.prior_mean.copy()
+        self.hessian = np.eye(self.d) / self.prior_var
+        self.exploration_a = exploration_a
         self.history = []
         self.history_prob = []
         self.eigenvalues = np.zeros(self.d)
-        
+
         self.X_buffer = np.zeros((max_samples, self.d))
         self.Y_buffer = np.zeros(max_samples)
         self.sample_count = 0
-        
+
         self._S_cache = None
         self._gram_inv_cache = None
         self.cov_base_cache = np.eye(self.d) * self.prior_var
+        self.min_eigenvalue = None
+        self.max_eigenvalue = None
+        self.condition_number = None
+        self.hessian_trace = None
         
     # def sample_theta(self):
     #     H_reg = self.hessian + 1e-4 * np.eye(self.d)
@@ -95,11 +100,13 @@ class LogisticThompsonOptimizer:
         Y = self.Y_buffer[:self.sample_count]
         
         # 2. 向量化的损失函数
+        prior_mean = self.prior_mean
         def neg_log_likelihood(theta):
-            # 正则项
-            loss = 0.5 / self.prior_var * np.sum(theta**2)
+            # 正则项: ||theta - prior_mean||^2 / (2 * prior_var)
+            diff = theta - prior_mean
+            loss = 0.5 / self.prior_var * np.sum(diff**2)
             # 矩阵乘法代替循环: (N, 128) @ (128,) -> (N,)
-            v = X @ theta 
+            v = X @ theta
             # 使用 log1p 和 exp 的向量化运算
             loss += np.sum(np.log1p(np.exp(np.clip(v, -20, 20))) - Y * v)
             return loss
@@ -108,8 +115,8 @@ class LogisticThompsonOptimizer:
         def gradient(theta):
             v = X @ theta
             prob = 1.0 / (1.0 + np.exp(-np.clip(v, -20, 20)))
-            # 梯度公式: X^T @ (prob - y) + theta/sigma^2
-            grad = X.T @ (prob - Y) + theta / self.prior_var
+            # 梯度公式: X^T @ (prob - y) + (theta - prior_mean)/sigma^2
+            grad = X.T @ (prob - Y) + (theta - prior_mean) / self.prior_var
             return grad
 
         # t1 = time.time()
@@ -127,6 +134,13 @@ class LogisticThompsonOptimizer:
         self.hessian = (X.T * weights) @ X + np.eye(self.d) / self.prior_var
         self.cov_base_cache = np.linalg.inv(self.hessian + 1e-4 * np.eye(self.d))
         # t_hessian_build = time.time() - t2
+        
+        eigvals = np.linalg.eigvalsh(self.hessian)
+        self.eigenvalues = eigvals
+        self.min_eigenvalue = float(eigvals[0])
+        self.max_eigenvalue = float(eigvals[-1])
+        self.condition_number = float(eigvals[-1] / max(eigvals[0], 1e-12))
+        self.hessian_trace = float(np.trace(self.hessian))
 
         # t3 = time.time()
         # self.eigenvalues = np.linalg.eigvalsh(self.hessian)

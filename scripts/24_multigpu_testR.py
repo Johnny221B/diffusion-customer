@@ -8,6 +8,7 @@ import torch.multiprocessing as mp
 import numpy as np
 import pandas as pd
 from datetime import datetime
+import gc
 
 from src.sd35_batch_generator import SD35BatchEmbeddingGenerator, SD35EmbeddingGenerator
 from src.thompson_optimizer import LogisticThompsonOptimizer
@@ -22,13 +23,27 @@ try:
 except RuntimeError:
     pass
 
-# 直接拿距离差当作reward可能会有scale的问题
-def get_logistic_prob(d_our, d_comp, sensitivity=1.0):
+def load_seeds_from_txt(txt_path, expected_n=None):
+    seeds = []
+    with open(txt_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            seeds.append(int(line))
+
+    if expected_n is not None and len(seeds) < expected_n:
+        raise ValueError(
+            f"Seed file only contains {len(seeds)} seeds, but expected at least {expected_n}."
+        )
+    return seeds
+
+def get_logistic_prob(d_our, d_comp, sensitivity=5.0):
     delta_d = d_comp - d_our
     prob = 1.0 / (1.0 + np.exp(-np.clip(sensitivity * delta_d, -20, 20)))
     return float(prob)
 
-def get_logistic_label(d_our, d_comp, sensitivity=1.0):
+def get_logistic_label(d_our, d_comp, sensitivity=5.0):
     prob = get_logistic_prob(d_our, d_comp, sensitivity)
     return 1 if np.random.rand() < prob else 0
 
@@ -47,7 +62,7 @@ def worker_fn(rank, task_queue, result_queue, model_path, ref_image_path, dist_c
         idx_chunk, z_4096_chunk, seeds, prompt, sensitivity, save_this_epoch_dir = task
         
         z_4096_torch = z_4096_chunk.to(device=device, dtype=torch.float16) 
-        embeds_batch = batch_gen.encode_batch_concat(prompt, z_4096_torch)
+        embeds_batch = batch_gen.encode_batch_insert(prompt, z_4096_torch)
         images = batch_gen.generate_batch(embeds_batch, seeds)
         
         y_list = [0] * len(images)
@@ -70,136 +85,163 @@ def worker_fn(rank, task_queue, result_queue, model_path, ref_image_path, dist_c
 
         result_queue.put((idx_chunk, y_list, d_list, p_list))
 
+def warmup_and_prepare(result_queue, model_path, ref_image, comp_image, batch_size, sensitivity, cold_start, explore_r, target_prompt, run_dir):
+    device = "cuda:0"
+
+    temp_gen = None
+    temp_scorer = None
+
+    try:
+        with torch.inference_mode():
+            opt = LogisticThompsonOptimizer(dim_latent=128)
+
+            W_raw = np.random.randn(4096, 128).astype(np.float32)
+            W_np, _ = np.linalg.qr(W_raw)
+            W_torch = torch.from_numpy(W_np).to(dtype=torch.float16, device=device)
+
+            temp_scorer = DreamSimScorer(device=device)
+            temp_gen = SD35EmbeddingGenerator(model_path, device=device)
+
+            prompt_outputs = temp_gen.pipe.encode_prompt(target_prompt, target_prompt, target_prompt)
+            prompt_high = prompt_outputs[0]
+
+            tokens = temp_gen.pipe.tokenizer(target_prompt, return_tensors="pt")
+            valid_len = tokens.input_ids.shape[1]
+            effective_len = min(valid_len, prompt_high.shape[1])
+
+            active_tokens = prompt_high[0, :effective_len, :]
+            S_matrix = (active_tokens @ W_torch).T.detach().cpu().float().numpy()
+
+            ref_tensor = temp_scorer.preprocess(ref_image)
+            comp_tensor = temp_scorer.preprocess(comp_image)
+            dist_competitor = temp_scorer.model(ref_tensor, comp_tensor).item()
+            
+            oracle_share = 1.0 / (1.0 + np.exp(-np.clip(sensitivity * dist_competitor, -20, 20)))
+            print(f">>> Oracle share (theoretical upper bound): {oracle_share*100:.2f}%")
+            
+            # global_seeds = [42 + i for i in range(100)]
+            # global_seeds = select_seeds_by_clip(
+            #     temp_gen=temp_gen,
+            #     prompt=target_prompt,
+            #     run_dir=run_dir,
+            #     candidate_n=300,
+            #     top_k=batch_size,
+            # )
+            # seed_txt_path = "/home/linyuliu/jxmount/diffusion_custom/outputs/dist_v22_0312_1234/seed_screening/selected_seeds.txt"
+            # base_seeds = load_seeds_from_txt(seed_txt_path, expected_n=4)[:4]
+            # global_seeds = [s for s in base_seeds for _ in range(2)]
+            # selected_seeds = select_seeds_by_clip(
+            #     temp_gen=temp_gen,
+            #     prompt=target_prompt,
+            #     run_dir=run_dir,
+            #     candidate_n=50,
+            #     top_k=4,
+            # )
+
+            # repeat_per_seed = batch_size // len(selected_seeds)
+            # global_seeds = [s for s in selected_seeds for _ in range(repeat_per_seed)]
+            fixed_seed = 783180
+            global_seeds = [fixed_seed] * batch_size
+            print(f">>> Using fixed seed for all samples: {fixed_seed}")
+
+            cold_start_records = []
+            cold_start_count = 0
+            labels_collected = set()
+
+            while cold_start_count < cold_start or len(labels_collected) < 2:
+                z_latent_raw = np.random.normal(0, 1.0, 128).astype(np.float32)
+                z_latent = opt.solve_analytical_best(z_latent_raw, R=explore_r, S_matrix=S_matrix)
+
+                z_projected = W_torch @ torch.from_numpy(z_latent).to(device, dtype=torch.float16)
+                embeds = temp_gen.encode_simple_insert(target_prompt, z_projected)
+                img = temp_gen.generate(embeds, seed=cold_start_count)
+
+                d_our = temp_scorer.model(ref_tensor, temp_scorer.preprocess(img)).item()
+                p = 1.0 / (1.0 + np.exp(-np.clip(sensitivity * (dist_competitor - d_our), -20, 20)))
+                y = 1 if np.random.rand() < p else 0
+
+                cold_start_records.append((z_latent.astype(np.float32), int(y)))
+                labels_collected.add(y)
+                cold_start_count += 1
+
+                img.close()
+                del z_projected, embeds, img
+
+            result_queue.put({
+                "W_np": W_np.astype(np.float32),
+                "S_matrix": S_matrix.astype(np.float32),
+                "dist_competitor": float(dist_competitor),
+                "global_seeds": list(global_seeds),
+                "cold_start_records": cold_start_records,
+                "optimal":oracle_share
+            })
+
+    finally:
+        # 显式清理
+        del temp_gen
+        del temp_scorer
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ref_image", type=str, required=True)
     parser.add_argument("--comp_image", type=str, required=True)
     parser.add_argument("--model_path", type=str, required=True)
-    parser.add_argument("--num_epochs", type=int, default=1000)
+    parser.add_argument("--num_epochs", type=int, default=300)
     parser.add_argument("--batch_size", type=int, default=100) 
     parser.add_argument("--sensitivity", type=float, default=5.0)
     parser.add_argument("--cold_start", type=int, default=5)
+    parser.add_argument("--explore_r", type=int, default=40)
     args = parser.parse_args()
 
-    run_dir = f"outputs/dist_v22_{datetime.now().strftime('%m%d_%H%M')}"
+    run_dir = f"outputs/R{args.explore_r}_v24_{datetime.now().strftime('%m%d_%H%M')}"
     os.makedirs(run_dir, exist_ok=True)
     csv_path = os.path.join(run_dir, "metrics.csv")
     pd.DataFrame(columns=["epoch", "share", "avg_dist", "avg_utility", "oracle_share", "regret", "hessian_min_eig", "hessian_max_eig", "hessian_cond"]).to_csv(csv_path, index=False)
-    global_seeds = [42 + i for i in range(args.batch_size)]
     # target_prompt = "Side profile of an athletic shoe, facing left, no brand logos, centered on white plain background"
     # target_prompt = "Product photo of a single athletic shoe, side profile, facing left, centered, full shoe visible, on a plain white background"
     target_prompt = "Product photo of a single shoe, full shoe visible, side profile, centered on a plain white background"
+    prompt_a = "Product photo of a single shoe with a specific style,"
+    prompt_b = "full shoe visible, side profile, centered on a plain white background"
 
     # --- Master 初始化 ---
+    prep_queue = mp.Queue()
+    prep_proc = mp.Process(
+        target=warmup_and_prepare,
+        args=(
+            prep_queue,
+            args.model_path,
+            args.ref_image,
+            args.comp_image,
+            args.batch_size,
+            args.sensitivity,
+            args.cold_start,
+            args.explore_r,
+            target_prompt,
+            run_dir,
+        ),
+    )
+    prep_proc.start()
+
+    prep_result = prep_queue.get()
+    prep_proc.join()
+    prep_proc.close()
+    
     opt = LogisticThompsonOptimizer(dim_latent=128)
-    W_raw = np.random.randn(4096, 128).astype(np.float32)
-    W_np, _ = np.linalg.qr(W_raw)
+
+    W_np = prep_result["W_np"]
     W_torch = torch.from_numpy(W_np).to(dtype=torch.float16)
-    
-    temp_scorer = DreamSimScorer(device="cuda:0")
-    temp_gen = SD35EmbeddingGenerator(args.model_path, device="cuda:0")
-    with torch.no_grad():
-        prompt_outputs = temp_gen.pipe.encode_prompt(target_prompt, target_prompt, target_prompt)
-        prompt_high = prompt_outputs[0] 
-        
-        token_norms = prompt_high[0].float().norm(dim=-1)   # [seq_len]
 
-        print("token norm median:", token_norms.median().item())
-        print("token norm p25   :", torch.quantile(token_norms, 0.25).item())
-        print("token norm p75   :", torch.quantile(token_norms, 0.75).item())
-        print("token norm p90   :", torch.quantile(token_norms, 0.90).item())
-        
-        prompt_global_norm = prompt_high.norm().item()
-        print(f"[Norm] prompt_high global L2 norm = {prompt_global_norm:.4f}")
-        
-        tokens = temp_gen.pipe.tokenizer(target_prompt, return_tensors="pt")
-        valid_len = tokens.input_ids.shape[1] 
-        effective_len = min(valid_len, prompt_high.shape[1])
-        
-        active_tokens = prompt_high[0, :effective_len, :] 
-        S_matrix = (active_tokens @ W_torch.to("cuda")).T.detach().cpu().float().numpy()
-        print(f">>> 动态检测到有效 Token 长度: {effective_len}，已纳入正交空间控制。")
+    S_matrix = prep_result["S_matrix"]
+    dist_competitor = prep_result["dist_competitor"]
+    global_seeds = prep_result["global_seeds"]
+    cold_start_records = prep_result["cold_start_records"]
+    oracle_share = prep_result["optimal"]
 
-    # --- 计算竞争者基准距离 ---
-    ref_tensor = temp_scorer.preprocess(args.ref_image)
-    comp_tensor = temp_scorer.preprocess(args.comp_image)
-    dist_competitor = temp_scorer.model(ref_tensor, comp_tensor).item()
-    
-    oracle_share = 1.0 / (1.0 + np.exp(-np.clip(args.sensitivity * dist_competitor, -20, 20)))
-    print(f">>> Oracle share (theoretical upper bound): {oracle_share*100:.2f}%")
-
-    # --- Phase 1: Cold Start (利用 temp_gen 快速初始化) ---
-    
-    print(">>> 启动冷启动...")
-    cold_start_count = 0
-    labels_collected = set()
-    
-    while cold_start_count < args.cold_start or len(labels_collected) < 2:
-        z_latent_raw = np.random.normal(0, 1.0, 128).astype(np.float32)
-        # 使用刚算好的 S_matrix 进行垂直化
-        z_latent = opt.solve_analytical_best(z_latent_raw, R=5.0, S_matrix=S_matrix)
-        
-        z_projected = W_torch.to("cuda") @ torch.from_numpy(z_latent).to("cuda", dtype=torch.float16)
-        embeds = temp_gen.encode_simple_concat(target_prompt, z_projected)
-        img = temp_gen.generate(embeds, seed=cold_start_count)
-        
-        d_our = temp_scorer.model(ref_tensor, temp_scorer.preprocess(img)).item()
-        y = get_logistic_label(d_our, dist_competitor, args.sensitivity)
-        
+    for z_latent, y in cold_start_records:
         opt.add_comparison_data(z_latent, [y])
-        labels_collected.add(y)
-        cold_start_count += 1
-
-        raw_norm = float(np.linalg.norm(z_latent_raw))
-        opt_norm = float(np.linalg.norm(z_latent))
-        
-        delta_128 = z_latent - z_latent_raw
-        delta_128_norm = float(np.linalg.norm(delta_128))
-        rel_delta_128 = delta_128_norm / (raw_norm + 1e-8)
-        
-        cos_128 = float(
-            np.dot(z_latent_raw, z_latent) /
-            ((np.linalg.norm(z_latent_raw) * np.linalg.norm(z_latent)) + 1e-8)
-        )
-        
-        z_raw_4096 = W_torch.to("cuda") @ torch.from_numpy(z_latent_raw).to("cuda", dtype=torch.float16)
-        z_opt_4096 = W_torch.to("cuda") @ torch.from_numpy(z_latent).to("cuda", dtype=torch.float16)
-
-        raw_4096_norm = float(torch.norm(z_raw_4096.float()).item())
-        opt_4096_norm = float(torch.norm(z_opt_4096.float()).item())
-
-        delta_4096 = (z_opt_4096 - z_raw_4096).float()
-        delta_4096_norm = float(torch.norm(delta_4096).item())
-        rel_delta_4096 = delta_4096_norm / (raw_4096_norm + 1e-8)
-
-        cos_4096 = float(torch.nn.functional.cosine_similarity(
-            z_raw_4096.float().unsqueeze(0),
-            z_opt_4096.float().unsqueeze(0),
-            dim=1
-        ).item())
-        
-        print(
-            f"[ColdStart {cold_start_count}] "
-            f"128D raw={raw_norm:.4f}, opt={opt_norm:.4f}, "
-            f"delta={delta_128_norm:.4f}, rel={rel_delta_128:.4f}, cos={cos_128:.4f} | "
-            f"4096D raw={raw_4096_norm:.4f}, opt={opt_4096_norm:.4f}, "
-            f"delta={delta_4096_norm:.4f}, rel={rel_delta_4096:.4f}, cos={cos_4096:.4f}"
-        )
-    
-    # print(">>> seed select...")
-    # global_seeds = select_seeds_by_clip(
-    #     temp_gen=temp_gen,
-    #     prompt=target_prompt,
-    #     run_dir=run_dir,
-    #     candidate_n=300,
-    #     top_k=args.batch_size,   # 100
-    # )
-    # print(f">>> Selected {len(global_seeds)} seeds for refinement.")
-    
-    # --- 彻底清理 Master 显存 ---
-    del temp_gen
-    del temp_scorer
-    torch.cuda.empty_cache()
     opt.update_posterior()
 
     # --- 启动 4 卡并行 ---
@@ -223,14 +265,14 @@ def main():
         mu_list = []
         
         save_this_epoch_dir = None
-        if epoch == 1 or epoch % 50 == 0:
+        if epoch == 1 or epoch % 10 == 0:
             save_this_epoch_dir = os.path.join(run_dir, f"epoch_{epoch:05d}")
             os.makedirs(save_this_epoch_dir, exist_ok=True)
             print(f">>> Epoch {epoch}: 开启图片保存模式，目录: {save_this_epoch_dir}")
             
         for _ in range(args.batch_size):
             mu_i, theta_i = opt.sample_theta()
-            z_i = opt.solve_analytical_best(theta_i, R=5.0, S_matrix=S_matrix)
+            z_i = opt.solve_analytical_best(theta_i, R=args.explore_r, S_matrix=S_matrix)
             z_128_all.append(z_i)
             theta_list.append(theta_i)
             mu_list.append(mu_i)
@@ -267,6 +309,21 @@ def main():
             y_buf[idx_chunk] = np.array(y_list, dtype=np.int64)
             d_buf[idx_chunk] = np.array(d_list, dtype=np.float32)
             p_buf[idx_chunk] = np.array(p_list, dtype=np.float32)
+            
+        if save_this_epoch_dir is not None:
+            latent_path = os.path.join(save_this_epoch_dir, "latents_and_stats.npz")
+            np.savez_compressed(
+                latent_path,
+                epoch=np.array([epoch], dtype=np.int32),
+                z_128_all=z_128_all.astype(np.float32),
+                theta_list=theta_list.astype(np.float32),
+                mu_list=mu_list.astype(np.float32),
+                y_buf=y_buf.astype(np.int64),
+                d_buf=d_buf.astype(np.float32),
+                p_buf=p_buf.astype(np.float32),
+                seeds=np.array(global_seeds, dtype=np.int64),
+            )
+            print(f">>> Epoch {epoch}: latent snapshot saved to {latent_path}")
 
         epoch_utilities = np.empty(args.batch_size, dtype=np.float32)
         for idx in range(args.batch_size):
@@ -297,12 +354,11 @@ def main():
             "hessian_cond": float(opt.condition_number),
         })
 
-        if epoch % 5 == 0:
+        if epoch % 1 == 0:
             df = pd.DataFrame(running_data)
             df.to_csv(csv_path, mode='a', index=False, header=False)
             print(
                 f"Epoch {epoch:05d} | Share: {df['share'].mean()*100:4.1f}% "
-                f"| ExpShare: {df['expectation_share'].mean()*100:4.1f}% "
                 f"| Oracle: {oracle_share*100:4.1f}% | Regret: {df['regret'].mean()*100:4.1f}% "
                 f"| Avg Dist: {df['avg_dist'].mean():.4f} | Utility: {current_utility:.4f}"
             )

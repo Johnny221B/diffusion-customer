@@ -92,7 +92,7 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 
-csv_path = "/home/linyuliu/jxmount/diffusion_custom/outputs/dist_v22_0306_0132/metrics.csv"
+csv_path = "/home/linyuliu/jxmount/diffusion_custom/outputs/dist_v23_0312_1525/metrics.csv"
 df = pd.read_csv(csv_path)
 
 # 确保 epoch 是数值，并按 epoch 排序

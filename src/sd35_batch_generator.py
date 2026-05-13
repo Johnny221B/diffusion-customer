@@ -52,6 +52,95 @@ class SD35BatchEmbeddingGenerator:
         p_combined = torch.cat([p_embeds_batch, z_v], dim=1)
         n_combined = torch.cat([n_p_embeds_batch, torch.zeros_like(z_v)], dim=1)
         return (p_combined, n_combined, pooled_batch, n_p_pooled_batch)
+    
+    @torch.no_grad()
+    def encode_batch_insert(self, prompt, z_vectors_batch, negative_prompt=None):
+        """
+        将 z 插入到两段 prompt 的中间，而不是直接拼到最后。
+
+        参数
+        ----
+        prompt : str
+            这里保留接口兼容，但函数内部会使用预定义的前后半句。
+        z_vectors_batch : Tensor
+            shape = (BS, 4096), CPU 或 GPU 都可以
+        negative_prompt : str or None
+        """
+        bs = z_vectors_batch.shape[0]
+
+        if negative_prompt is None:
+            negative_prompt = "cropped, out of frame, close-up, off-center, cut off, blurry"
+
+        # 你想要的两段 prompt
+        prompt_a = "Product photo of a single shoe with a style,"
+        prompt_b = "full shoe visible, side profile, centered on a white background"
+        # prompt_a = "Product photo of a single shoe with a specific style,"
+        # prompt_b = "full shoe visible, side profile, centered on a plain white background"
+
+        # 完整 prompt 只用来提供 pooled embedding
+        full_prompt = f"{prompt_a} {prompt_b}"
+
+        cache_key = (prompt_a, prompt_b, full_prompt, negative_prompt)
+
+        if cache_key in self._prompt_cache:
+            (
+                p_a, p_b,
+                n_a, n_b,
+                pooled_full, n_p_pooled_full
+            ) = self._prompt_cache[cache_key]
+        else:
+            # 前半句 token embeddings
+            out_a = self.pipe.encode_prompt(
+                prompt=prompt_a,
+                prompt_2=prompt_a,
+                prompt_3=prompt_a,
+                negative_prompt=negative_prompt
+            )
+            p_a, n_a, _, _ = out_a
+
+            # 后半句 token embeddings
+            out_b = self.pipe.encode_prompt(
+                prompt=prompt_b,
+                prompt_2=prompt_b,
+                prompt_3=prompt_b,
+                negative_prompt=negative_prompt
+            )
+            p_b, n_b, _, _ = out_b
+
+            # 完整 prompt 的 pooled embeddings
+            out_full = self.pipe.encode_prompt(
+                prompt=full_prompt,
+                prompt_2=full_prompt,
+                prompt_3=full_prompt,
+                negative_prompt=negative_prompt
+            )
+            _, _, pooled_full, n_p_pooled_full = out_full
+
+            self._prompt_cache[cache_key] = (
+                p_a, p_b,
+                n_a, n_b,
+                pooled_full, n_p_pooled_full
+            )
+
+        # expand 到 batch
+        p_a_batch = p_a.expand(bs, -1, -1).contiguous()
+        p_b_batch = p_b.expand(bs, -1, -1).contiguous()
+        n_a_batch = n_a.expand(bs, -1, -1).contiguous()
+        n_b_batch = n_b.expand(bs, -1, -1).contiguous()
+
+        pooled_batch = pooled_full.expand(bs, -1).contiguous()
+        n_p_pooled_batch = n_p_pooled_full.expand(bs, -1).contiguous()
+
+        # z: (BS, 4096) -> (BS, 1, 4096)
+        z_v = z_vectors_batch.to(device=self.device, dtype=p_a.dtype).unsqueeze(1)
+
+        # 正向：前半句 + z + 后半句
+        p_combined = torch.cat([p_a_batch, z_v, p_b_batch], dim=1)
+
+        # 负向：前半句负向 + 0向量 + 后半句负向
+        n_combined = torch.cat([n_a_batch, torch.zeros_like(z_v), n_b_batch], dim=1)
+
+        return (p_combined, n_combined, pooled_batch, n_p_pooled_batch)
 
     @torch.inference_mode()
     def generate_batch(self, embeds_batch, seeds):
@@ -66,8 +155,8 @@ class SD35BatchEmbeddingGenerator:
             pooled_prompt_embeds=pooled, 
             negative_pooled_prompt_embeds=n_p_pooled,
             num_inference_steps=20, 
-            guidance_scale=4.5,
-            height=384, width=384, 
+            guidance_scale=5,
+            height=496, width=496, 
             generator=generators,
             output_type="pil"
         ).images
@@ -76,9 +165,12 @@ class SD35BatchEmbeddingGenerator:
 class SD35EmbeddingGenerator:
     def __init__(self, model_path, device="cuda", torch_dtype=torch.float16):
         self.pipe = StableDiffusion3Pipeline.from_pretrained(
-            model_path, torch_dtype=torch_dtype
+            model_path, torch_dtype=torch_dtype,
+            variant="fp16"
         ).to(device)
         self.device = device
+        self.pipe.set_progress_bar_config(disable=True)
+        self._prompt_cache = {}
 
     # @torch.no_grad()
     # def encode_sandwich(self, prompt, z_vector):
@@ -124,6 +216,64 @@ class SD35EmbeddingGenerator:
         n_combined = torch.cat([n_p_embeds, torch.zeros_like(z_v)], dim=1)
         
         return (p_combined, n_combined, pooled, n_p_pooled)
+    
+    @torch.no_grad()
+    def encode_simple_insert(self, prompt, z_vector, negative_prompt=None):
+        """
+        单张版本：将 z 插入到两段 prompt 中间
+        """
+        if negative_prompt is None:
+            negative_prompt = "cropped, out of frame, close-up, off-center, cut off, blurry"
+
+        prompt_a = "Product photo of a single shoe with a style,"
+        prompt_b = "full shoe visible, side profile, centered on a white background"
+        full_prompt = f"{prompt_a} {prompt_b}"
+
+        cache_key = (prompt_a, prompt_b, full_prompt, negative_prompt)
+
+        if cache_key in self._prompt_cache:
+            (
+                p_a, p_b,
+                n_a, n_b,
+                pooled_full, n_p_pooled_full
+            ) = self._prompt_cache[cache_key]
+        else:
+            out_a = self.pipe.encode_prompt(
+                prompt=prompt_a,
+                prompt_2=prompt_a,
+                prompt_3=prompt_a,
+                negative_prompt=negative_prompt
+            )
+            p_a, n_a, _, _ = out_a
+
+            out_b = self.pipe.encode_prompt(
+                prompt=prompt_b,
+                prompt_2=prompt_b,
+                prompt_3=prompt_b,
+                negative_prompt=negative_prompt
+            )
+            p_b, n_b, _, _ = out_b
+
+            out_full = self.pipe.encode_prompt(
+                prompt=full_prompt,
+                prompt_2=full_prompt,
+                prompt_3=full_prompt,
+                negative_prompt=negative_prompt
+            )
+            _, _, pooled_full, n_p_pooled_full = out_full
+
+            self._prompt_cache[cache_key] = (
+                p_a, p_b,
+                n_a, n_b,
+                pooled_full, n_p_pooled_full
+            )
+
+        z_v = z_vector.to(device=self.device, dtype=p_a.dtype).view(1, 1, -1)
+
+        p_combined = torch.cat([p_a, z_v, p_b], dim=1)
+        n_combined = torch.cat([n_a, torch.zeros_like(z_v), n_b], dim=1)
+
+        return (p_combined, n_combined, pooled_full, n_p_pooled_full)
 
     @torch.inference_mode()
     def generate(self, embeds, seed=123):
@@ -132,6 +282,6 @@ class SD35EmbeddingGenerator:
         return self.pipe(
             prompt_embeds=p, negative_prompt_embeds=n_p,
             pooled_prompt_embeds=pooled, negative_pooled_prompt_embeds=n_p_pooled,
-            num_inference_steps=20, guidance_scale=4.5,
-            height=384, width=384, generator=generator
+            num_inference_steps=20, guidance_scale=5,
+            height=496, width=496, generator=generator
         ).images[0]
