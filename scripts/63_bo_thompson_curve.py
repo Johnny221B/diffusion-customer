@@ -208,13 +208,18 @@ class RFBootstrapSurrogate:
 
 
 def make_surrogates(d, args):
-    return [
+    surr = [
         BayesianLogisticSurrogate(d, prior_var=args.prior_var),
         L2LogisticSurrogate(d, C=args.prior_var, epsilon=args.epsilon),
         Poly2Surrogate(d, prior_var=args.prior_var),
         GPRBFSurrogate(d, refit_every=args.gp_refit_every),
         RFBootstrapSurrogate(d),
     ]
+    # poly2's degree-2 expansion is d*(d+3)/2 features (324 at d=24): the
+    # Laplace Hessian inversion becomes prohibitive at high d. Allow skipping it.
+    if getattr(args, "skip_poly2", False):
+        surr = [s for s in surr if s.name != "poly2_logistic"]
+    return surr
 
 
 def run_one_sim_seed(seed, Z_full, dreams, D_B, p_oracle, args):
@@ -228,9 +233,17 @@ def run_one_sim_seed(seed, Z_full, dreams, D_B, p_oracle, args):
 
     surrogates = make_surrogates(d, args)
 
-    # ---- Warm-start: N0 iid (word, seed) samples shared across all surrogates ----
+    theta_batch = (args.acq_mode == "theta_batch")
+    s0 = int(args.fixed_seed) % M   # the single fixed seed in theta_batch mode
+
+    # ---- Warm-start: N0 iid word samples shared across all surrogates ----
+    # seed_batch: each warm sample uses a random seed.
+    # theta_batch: every image uses the single fixed seed s0 (the new regime
+    #   keeps ONE seed throughout, so warm-start must too, else the two runs
+    #   would differ in their warm data and confound the comparison).
     warm_idx = rng.randint(0, n_words, size=args.N0)
-    warm_s   = rng.randint(0, M, size=args.N0)
+    warm_s   = (np.full(args.N0, s0, dtype=int) if theta_batch
+                else rng.randint(0, M, size=args.N0))
     warm_D   = dreams[warm_idx, warm_s]
     warm_p   = sigmoid(args.alpha * (D_B - warm_D))
     warm_y   = (rng.uniform(size=args.N0) < warm_p).astype(int)
@@ -244,24 +257,50 @@ def run_one_sim_seed(seed, Z_full, dreams, D_B, p_oracle, args):
     records = []
     for t in range(1, args.T + 1):
         for sur in surrogates:
-            i_star = sur.acquire(Z_full, rng)
-            # B distinct seeds for word i_star
-            s_batch = rng.choice(M, size=args.B, replace=False)
-            D_batch = dreams[i_star, s_batch]
-            p_batch = sigmoid(args.alpha * (D_B - D_batch))
-            y_batch = (rng.uniform(size=args.B) < p_batch).astype(int)
-            empirical = float((D_batch < D_B).mean())
-            for b in range(args.B):
-                sur.add(Z_full[i_star], y_batch[b])
-            sur.step_update(t=t)
-            records.append({
-                "sim_seed": seed,
-                "model":   sur.name,
-                "step":    t,
-                "picked_idx":  i_star,
-                "p_oracle":    float(p_oracle[i_star]),
-                "empirical_B": empirical,
-            })
+            if theta_batch:
+                # Parallel/batch Thompson: draw B independent acquisitions from
+                # the SAME current posterior (B theta samples for TS surrogates;
+                # B eps-greedy draws for logistic_l2), each proposing one word.
+                # Each proposed word is "generated" at the single fixed seed s0,
+                # so the batch's diversity comes from posterior sampling, not
+                # from seed replication. Observe B labels, then ONE update.
+                arms = np.array([sur.acquire(Z_full, rng) for _ in range(args.B)],
+                                dtype=int)
+                D_arms = dreams[arms, s0]
+                p_arms = sigmoid(args.alpha * (D_B - D_arms))
+                y_arms = (rng.uniform(size=args.B) < p_arms).astype(int)
+                for b in range(args.B):
+                    sur.add(Z_full[arms[b]], y_arms[b])
+                sur.step_update(t=t)
+                for b in range(args.B):
+                    records.append({
+                        "sim_seed": seed,
+                        "model":   sur.name,
+                        "step":    t,
+                        "picked_idx":  int(arms[b]),
+                        "p_oracle":    float(p_oracle[arms[b]]),
+                        "empirical_B": float(D_arms[b] < D_B),
+                        "arm_in_batch": b,
+                    })
+            else:
+                i_star = sur.acquire(Z_full, rng)
+                # B distinct seeds for word i_star
+                s_batch = rng.choice(M, size=args.B, replace=False)
+                D_batch = dreams[i_star, s_batch]
+                p_batch = sigmoid(args.alpha * (D_B - D_batch))
+                y_batch = (rng.uniform(size=args.B) < p_batch).astype(int)
+                empirical = float((D_batch < D_B).mean())
+                for b in range(args.B):
+                    sur.add(Z_full[i_star], y_batch[b])
+                sur.step_update(t=t)
+                records.append({
+                    "sim_seed": seed,
+                    "model":   sur.name,
+                    "step":    t,
+                    "picked_idx":  i_star,
+                    "p_oracle":    float(p_oracle[i_star]),
+                    "empirical_B": empirical,
+                })
     return records
 
 
@@ -335,6 +374,15 @@ def main():
     parser.add_argument("--B_seed",      type=int, default=34)
     parser.add_argument("--out_root",    type=str, default="outputs")
     parser.add_argument("--tag",         type=str, default="bcanvas")
+    parser.add_argument("--skip_poly2",  action="store_true",
+                        help="drop poly2_logistic (prohibitive Hessian at high d)")
+    parser.add_argument("--acq_mode", type=str, default="seed_batch",
+                        choices=["seed_batch", "theta_batch"],
+                        help="seed_batch (canonical): 1 arm x B random seeds. "
+                             "theta_batch: B posterior samples x 1 fixed seed "
+                             "(parallel Thompson sampling).")
+    parser.add_argument("--fixed_seed", type=int, default=0,
+                        help="the single seed used per image in theta_batch mode")
     args = parser.parse_args()
 
     stamp = datetime.now().strftime("%m%d_%H%M")

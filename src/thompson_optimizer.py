@@ -37,7 +37,17 @@ class LogisticThompsonOptimizer:
     def sample_theta(self):
         # cov = a^2 * (H + reg)^-1
         cov = (self.exploration_a**2) * self.cov_base_cache
-        theta_full = np.random.multivariate_normal(self.mu_map, cov)
+        try:
+            # primary path (unchanged): identical draws to prior runs when cov is PD
+            theta_full = np.random.multivariate_normal(self.mu_map, cov)
+        except np.linalg.LinAlgError:
+            # ill-conditioned posterior (e.g. high-dim poly2 under near-separable
+            # labels): multivariate_normal's internal SVD can fail to converge.
+            # Symmetric eigendecomposition is robust; clip negatives, then sample.
+            cov = 0.5 * (cov + cov.T)
+            w, V = np.linalg.eigh(cov)
+            w = np.clip(w, 1e-12, None)
+            theta_full = self.mu_map + (V * np.sqrt(w)) @ np.random.standard_normal(self.d)
         return theta_full[0], theta_full[1:]
 
     def solve_analytical_best(self, theta_v, R, S_matrix):
