@@ -2,7 +2,7 @@
 
 > 本文记录 2026-06-22 起用于后续 continuous 实验的 canonical setting。
 > 它是 `cmts_continuous.md` 的具体实验配置补充；算法总历史仍以该文档为准。
-> 当前状态：同一批 5 条 trajectory 已配对续跑并完成 T=500。
+> 当前状态：T=500 已完成；同一批 5 条 trajectory 正从 T=500 配对续跑到 T=1000。
 
 ## 1. TL;DR
 
@@ -177,7 +177,7 @@ batch size       8
 | `S` | 8.0 | beta norm safety clip |
 | `n0` | 24 | warm-start designs |
 | `B` | 8 | independent Thompson draws/images per round |
-| `T` | 500 completed | BO rounds per trajectory |
+| `T` | 500 completed; 1000 running | BO rounds per trajectory |
 | sim seeds | 0–4 | five independent algorithm trajectories |
 | competitor | bright/18 | `D_B=0.4704614282` |
 | render seed | 1810772 | fixed SD3.5 generator seed |
@@ -260,6 +260,7 @@ T=500 主图：`outputs/cmts_top4_summary_0621_0437/a30_v2_lam50_T500_diagnostic
 - T=200 top-4 launch：`scripts/93_launch_discrete_top4_continuous.sh`
 - T=300 extension：`scripts/95_extend_a30_v2_lam50_T300.sh`
 - T=500 extension：`scripts/97_extend_a30_v2_lam50_T500.sh`
+- T=1000 extension：`scripts/99_extend_a30_v2_lam50_T1000.sh`
 - top-4 summary：`scripts/94_top4_continuous_summary.py`
 - T=300 diagnostic：`scripts/96_a30_v2_lam50_T300_diag.py`
 
