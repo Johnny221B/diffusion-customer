@@ -4,7 +4,9 @@ This intentionally differs from the historical discrete experiment (script 63):
 
 * the model feature is ``phi = z - z_comp`` with no intercept, as in script 73;
 * each round uses B independent Thompson draws, hence B (possibly repeated) words;
-* every selected word gets an independently sampled pre-rendered seed;
+* by default every selected word gets an independently sampled pre-rendered seed;
+  with --fixed_image_seed, each word maps to exactly one pre-rendered image,
+  matching the fixed-render-seed continuous setting;
 * Laplace MAP, ridge precision ``lam``, norm clip ``S`` and covariance inflation
   ``v`` are exactly the implementations used by continuous CM-TS;
 * training alpha and evaluation alpha are separate.  This is required for a
@@ -23,6 +25,13 @@ Full first-pass screen::
   conda run -n diverse python scripts/92_discrete_cmts_sweep.py \
     --alphas 10,15,20,30 --vs 0.25,0.5,1,2,4 \
     --lams 0.5,1,5,10,50 --n_sim 20 --T 200 --tag grid1
+
+Fixed-image-seed screen, matching the current continuous setting more closely::
+
+  conda run -n diverse python scripts/92_discrete_cmts_sweep.py \
+    --fixed_image_seed 18 --alphas 3,5,7.5,10,15,20,30 \
+    --vs 0.5,1,2,4 --lams 10,20,50,100 \
+    --eval_alpha 30 --n_sim 20 --T 200 --tag fixedseed_alpha
 """
 
 import argparse
@@ -84,12 +93,20 @@ def run_one(alpha, v, lam, sim_seed, Z, dreams, z_comp, D_B,
             p_eval_word, mean_ds_word, args):
     """Run one discrete CM-TS simulation and return one aggregate row per round."""
     n_words, n_seeds = dreams.shape
+    fixed_seed = None
+    if args.fixed_image_seed >= 0:
+        fixed_seed = int(args.fixed_image_seed) % n_seeds
     # Identical initial random stream across configurations for a given sim.
     rng = np.random.default_rng(sim_seed * 1000 + 7)
     Phi_all = Z - z_comp
+    p_train_word = (sigma(alpha * (D_B - dreams[:, fixed_seed]))
+                    if fixed_seed is not None
+                    else sigma(alpha * (D_B - dreams)).mean(axis=1))
 
     warm_idx = rng.integers(n_words, size=args.N0)
-    warm_seed = rng.integers(n_seeds, size=args.N0)
+    warm_seed = (np.full(args.N0, fixed_seed, dtype=int)
+                 if fixed_seed is not None
+                 else rng.integers(n_seeds, size=args.N0))
     warm_ds = dreams[warm_idx, warm_seed]
     warm_prob = sigma(alpha * (D_B - warm_ds))
     warm_y = rng.binomial(1, warm_prob).astype(float)
@@ -110,12 +127,13 @@ def run_one(alpha, v, lam, sim_seed, Z, dreams, z_comp, D_B,
         # Subtracting z_comp is constant over arms, so either Z or Phi_all gives
         # the same argmax.  Phi_all makes the connection to the model explicit.
         arms = np.argmax(betas @ Phi_all.T, axis=1)
-        image_seeds = rng.integers(n_seeds, size=args.B)
+        image_seeds = (np.full(args.B, fixed_seed, dtype=int)
+                       if fixed_seed is not None
+                       else rng.integers(n_seeds, size=args.B))
         ds = dreams[arms, image_seeds]
         p_train = sigma(alpha * (D_B - ds))
         p_eval_sample = sigma(args.eval_alpha * (D_B - ds))
         y_batch = rng.binomial(1, p_train).astype(float)
-
         Phi_batch = Phi_all[arms]
         Phi = np.vstack((Phi, Phi_batch))
         y = np.append(y, y_batch)
@@ -133,10 +151,14 @@ def run_one(alpha, v, lam, sim_seed, Z, dreams, z_comp, D_B,
             "t": t,
             "true_p_soft_sample": float(np.mean(p_eval_sample)),
             "true_p_soft_oracle": float(np.mean(p_eval_word[arms])),
+            "true_p_train_oracle": float(np.mean(p_train_word[arms])),
             "predicted_p": float(np.mean(predicted)),
             "mean_ds_sample": float(np.mean(ds)),
             "mean_ds_oracle": float(np.mean(mean_ds_word[arms])),
+            "round_min_ds_sample": float(np.min(ds)),
+            "round_min_ds_oracle": float(np.min(mean_ds_word[arms])),
             "hard_winrate": float(np.mean(ds < D_B)),
+            "fixed_image_seed": -1 if fixed_seed is None else int(fixed_seed),
             "label_rate": float(np.mean(y_batch)),
             "beta_norm": float(np.linalg.norm(beta_hat)),
             "cov_eig_max": float(cov_eigs[-1]),
@@ -151,7 +173,7 @@ def make_summary(df, args):
     early = df[df["t"] < window]
     late = df[df["t"] >= args.T - window]
     metrics = [
-        "true_p_soft_sample", "true_p_soft_oracle", "predicted_p",
+        "true_p_soft_sample", "true_p_soft_oracle", "true_p_train_oracle", "predicted_p",
         "mean_ds_sample", "mean_ds_oracle", "hard_winrate", "beta_norm",
     ]
     keys = ["config", "alpha_train", "alpha_eval", "v", "lam"]
@@ -234,6 +256,9 @@ def main():
     ap.add_argument("--S", type=float, default=8.0)
     ap.add_argument("--B_word", default="bright")
     ap.add_argument("--B_seed", type=int, default=18)
+    ap.add_argument("--fixed_image_seed", type=int, default=-1,
+                    help="if >=0, every word is evaluated only at this image seed; "
+                         "default -1 samples a pre-rendered seed independently")
     ap.add_argument("--out_root", default="outputs")
     ap.add_argument("--tag", default="grid1")
     ap.add_argument("--plot_top", type=int, default=12)
@@ -249,12 +274,19 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
 
     Z, dreams, words, z_comp, D_B, pca_var = load_problem(args)
-    p_eval_word = sigma(args.eval_alpha * (D_B - dreams)).mean(axis=1)
-    mean_ds_word = dreams.mean(axis=1)
+    if args.fixed_image_seed >= 0:
+        fixed_seed = int(args.fixed_image_seed) % dreams.shape[1]
+        p_eval_word = sigma(args.eval_alpha * (D_B - dreams[:, fixed_seed]))
+        mean_ds_word = dreams[:, fixed_seed]
+    else:
+        fixed_seed = None
+        p_eval_word = sigma(args.eval_alpha * (D_B - dreams)).mean(axis=1)
+        mean_ds_word = dreams.mean(axis=1)
     config = vars(args).copy()
     config.update({"alphas_parsed": alphas, "vs_parsed": vs,
                    "lams_parsed": lams, "D_B": D_B,
                    "n_candidates": len(words), "n_image_seeds": dreams.shape[1],
+                   "fixed_image_seed_resolved": fixed_seed,
                    "pca_explained_variance": pca_var})
     with open(os.path.join(out_dir, "config.json"), "w") as f:
         json.dump(config, f, indent=2)
@@ -286,7 +318,8 @@ def main():
     plot_top(df, summary, out_dir, args)
     print("\nTop configurations by late exact true p:")
     cols = ["config", "true_p_soft_oracle_early", "true_p_soft_oracle_late",
-            "true_p_soft_oracle_delta", "predicted_p_late", "belief_gap_late",
+            "true_p_soft_oracle_delta", "true_p_train_oracle_delta",
+            "predicted_p_late", "belief_gap_late",
             "mean_ds_oracle_late", "beta_norm_late"]
     print(summary[cols].head(min(12, len(summary))).to_string(index=False))
     print(f"\nSaved: {out_dir}")

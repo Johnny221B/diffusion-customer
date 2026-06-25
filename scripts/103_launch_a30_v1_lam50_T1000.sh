@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Launch five alpha=30, v=1, lambda=50 trajectories through T=1000.
+set -u
+cd /home/linyuliu/jxmount/diffusion_custom
+
+OUT=outputs/cmts_a30_v1_lam50_bbright_d16_B8_T1000
+MODEL=models/stabilityai/stable-diffusion-3.5-large
+
+if pgrep -f "[7]3_cmts_dreamsim.py" >/dev/null; then
+  echo "REFUSING: 73_cmts_dreamsim.py already running."
+  pgrep -af "[7]3_cmts_dreamsim.py"
+  exit 1
+fi
+
+launch () {  # gpu seed_start seed_end partial_id
+  local G=$1 SS=$2 SE=$3 PID=$4
+  env -u LD_LIBRARY_PATH CUDA_VISIBLE_DEVICES=$G \
+    setsid conda run -n diverse --no-capture-output \
+    python scripts/73_cmts_dreamsim.py \
+      --model_path "$MODEL" --device cuda:0 \
+      --B_word bright --B_seed 18 \
+      --seed_start "$SS" --seed_end "$SE" \
+      --dim 16 --T 1000 --B 8 --n0 24 \
+      --v 1.0 --S 8.0 --lam 50 --alpha 30 \
+      --save_img_every 10 --partial_id "$PID" --tag cmts \
+      --out_root "$OUT" \
+      >> "$OUT/launch_T1000_g${G}.log" 2>&1 </dev/null &
+  echo "GPU$G sims=[$SS,$SE) pid=$!"
+}
+
+mkdir -p "$OUT"
+echo "=== launch a30_v1_lam50: T1000, five trajectories ==="
+launch 0 0 2 50
+launch 1 2 3 51
+launch 2 3 4 52
+launch 3 4 5 53
+echo "=== four detached workers launched ==="

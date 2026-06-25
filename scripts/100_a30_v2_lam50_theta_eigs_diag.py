@@ -20,8 +20,8 @@ BASE = Path("outputs/cmts_a30_v2_lam50_bbright_d16_B8_T200_0621_0437")
 OUT_DIR = Path("outputs/cmts_top4_summary_0621_0437")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-OUT_PNG = OUT_DIR / "a30_v2_lam50_theta_eigs_T1000_partial.png"
-OUT_CSV = OUT_DIR / "a30_v2_lam50_theta_eigs_T1000_partial.csv"
+OUT_PNG = OUT_DIR / "a30_v2_lam50_theta_eigs_T1000.png"
+OUT_CSV = OUT_DIR / "a30_v2_lam50_theta_eigs_T1000.csv"
 
 
 def load_per_round() -> pd.DataFrame:
