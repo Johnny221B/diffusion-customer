@@ -26,6 +26,28 @@ OUT.mkdir(parents=True, exist_ok=True)
 GOOD = ["sim001", "sim002", "sim003"]
 D_B = 0.4704614281654358
 PREV_BEST_DS = 0.2803
+DREAMS_NPZ = Path("outputs/multiseed_s228_M40_0510_0241/dreams_matrix.npz")
+ALPHA = 10.0
+
+
+def sigmoid(x):
+    return 1.0 / (1.0 + np.exp(-x))
+
+
+def soft_success_ceiling(alpha: float = ALPHA):
+    """Discrete 40-seed oracle upper reference for true_p at this alpha.
+
+    This is max_w mean_seed sigmoid(alpha * (D_B - D[w, seed])).
+    It is alpha-dependent and is a reference ceiling for the precomputed
+    discrete pool, not a strict mathematical bound for arbitrary continuous
+    PCA-manifold points.
+    """
+    z = np.load(DREAMS_NPZ, allow_pickle=True)
+    dreams = z["dreams"].astype(float)
+    words = z["words"].astype(str)
+    p_by_word = sigmoid(alpha * (D_B - dreams)).mean(axis=1)
+    i = int(np.argmax(p_by_word))
+    return float(p_by_word[i]), str(words[i])
 
 
 def load_rounds() -> pd.DataFrame:
@@ -75,6 +97,7 @@ def draw(ax, df, col, color, label, ls="-", band=True, smooth=15):
 def plot_perf(df: pd.DataFrame):
     fig, axes = plt.subplots(2, 2, figsize=(14.5, 9.5), sharex=True)
     (ax_hard, ax_belief), (ax_ds, ax_best) = axes
+    ceiling, ceiling_word = soft_success_ceiling(ALPHA)
 
     draw(ax_hard, df, "hard", "tab:red", "hard win-rate")
     ax_hard.axhline(0.5, color="0.4", ls=":", lw=1)
@@ -84,6 +107,13 @@ def plot_perf(df: pd.DataFrame):
     draw(ax_belief, df, "pred_p", "tab:red", "predicted p", ls="--", band=False)
     ax_belief.axhline(0.5, color="0.4", ls=":", lw=1)
     ax_belief.axhline(1.0, color="0.2", ls=":", lw=1, label="ceiling=1")
+    ax_belief.axhline(
+        ceiling,
+        color="k",
+        ls="--",
+        lw=1.3,
+        label=f"discrete soft oracle={ceiling:.3f} ({ceiling_word})",
+    )
 
     draw(ax_ds, df, "mean_ds", "tab:purple", "mean ds-to-R")
     ax_ds.axhline(D_B, color="0.4", ls=":", lw=1, label=f"$D_B$={D_B:.4f}")
