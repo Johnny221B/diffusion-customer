@@ -1,0 +1,13 @@
+{
+  "word": "canvas",
+  "seed": 34,
+  "pca_dim": 16,
+  "n_anchors": 228,
+  "pca_explained_variance_ratio_sum": 0.2639160337570664,
+  "embedding_l2_reconstruction_error": 28.2417137564489,
+  "embedding_relative_l2_error": 0.8030699792197847,
+  "embedding_cosine_original_vs_reconstructed": 0.5959857685397704,
+  "dreamsim_direct_vs_pca": 0.27684617042541504,
+  "dreamsim_direct_to_reference": 0.6204741597175598,
+  "dreamsim_pca_to_reference": 0.5390459299087524
+}
