@@ -167,6 +167,7 @@ def one_run(rep, args):
                              recommendation_probability=recommendation_probability,
                              recommendation_simple_regret=p_star - recommendation_probability,
                              chosen_probability=p_true[idx], instantaneous_regret=regret,
+                             cumulative_regret=cumulative[j],
                              average_cumulative_regret=cumulative[j] / t,
                              theta_cosine=(np.dot(pol.beta, theta_star) /
                                 (np.linalg.norm(pol.beta) * np.linalg.norm(theta_star) + 1e-12)) if j == 0 else np.nan))
@@ -174,33 +175,47 @@ def one_run(rep, args):
 
 
 def plot(df, out, args):
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8), sharex=True)
-    metrics = [("chosen_probability", "Share and Oracle Share", "share", True),
-               ("cos_sim", "Cosine Similarity", "cos_sim", False),
-               ("instantaneous_regret", "Regret", "regret", True),
-               ("norm_mse", "Normalized MSE", "norm_mse", False)]
-    for ax, (metric, title, ylabel, smooth) in zip(axes.flat, metrics):
-        for name, color in zip(NAMES, COLORS):
-            x = df[df.method == name].pivot(index="round", columns="rep", values=metric)
-            mean = x.mean(1)
-            if smooth: mean = mean.rolling(15, center=True, min_periods=1).mean()
-            se = x.std(1) / np.sqrt(x.shape[1])
-            ax.plot(mean.index, mean, label=name, color=color, lw=2)
-            ax.fill_between(mean.index, mean-se, mean+se, color=color, alpha=.12)
-        ax.set_title(title); ax.set_xlabel("Round"); ax.set_ylabel(ylabel); ax.grid(alpha=.25)
-    oracle = df.pivot_table(index="round", columns="rep", values="oracle_share").mean(1)
-    axes[0, 0].plot(oracle.index, oracle, color="black", ls="--", lw=1.8,
-                    label="Oracle share")
-    handles, labels = axes[0, 0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(.5, .945),
-               ncol=3, frameon=False, fontsize=9)
-    fig.suptitle("Convergence and Regret Across Discrete Policies",
-                 y=.992, fontsize=14)
-    fig.subplots_adjust(left=.075, right=.985, bottom=.075, top=.82,
-                        wspace=.16, hspace=.28)
-    fig.savefig(out / "discrete_five_method_convergence_regret.png", dpi=250)
-    fig.savefig(out / "discrete_five_method_convergence_regret.pdf")
-    plt.close(fig)
+    # Sum within each replication before computing the mean and uncertainty.
+    # Reconstruct from per-round losses to support existing metrics.csv files.
+    df = df.sort_values(["method", "rep", "round"]).copy()
+    df["cumulative_regret"] = df.groupby(["method", "rep"])["instantaneous_regret"].cumsum()
+    groups = [
+        ("discrete_five_method_convergence_regret", "Convergence and Regret Across Discrete Policies",
+         [("cumulative_regret", "Cumulative Regret", r"$R_t = \sum_{s=1}^{t}(p^* - p_s)$", False),
+          ("norm_mse", "Normalized MSE", "Normalized MSE", False)]),
+        ("discrete_five_method_share", "Share and Oracle Share",
+         [("chosen_probability", "Share and Oracle Share", "Share", True)]),
+        ("discrete_five_method_cosine", "Cosine Similarity",
+         [("cos_sim", "Cosine Similarity", "Cosine Similarity", False)]),
+    ]
+    for filename, title, metrics in groups:
+        single = len(metrics) == 1
+        fig, axes = plt.subplots(1, len(metrics), figsize=(7.5 if single else 12, 4.8), sharex=True)
+        axes = np.atleast_1d(axes)
+        for ax, (metric, panel_title, ylabel, smooth) in zip(axes, metrics):
+            for name, color in zip(NAMES, COLORS):
+                x = df[df.method == name].pivot(index="round", columns="rep", values=metric)
+                if smooth:
+                    x = x.rolling(15, center=True, min_periods=1).mean()
+                mean = x.mean(1)
+                se = x.std(1) / np.sqrt(x.shape[1])
+                ax.plot(mean.index, mean, label=name, color=color, lw=2)
+                ax.fill_between(mean.index, mean-se, mean+se, color=color, alpha=.12)
+            if metric == "chosen_probability":
+                oracle = df.pivot_table(index="round", columns="rep", values="oracle_share").mean(1)
+                ax.plot(oracle.index, oracle, color="black", ls="--", lw=1.8,
+                        label="Oracle share")
+            if not single:
+                ax.set_title(panel_title)
+            ax.set_xlabel("Round"); ax.set_ylabel(ylabel); ax.grid(alpha=.25)
+        handles, labels = axes[0].get_legend_handles_labels()
+        fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(.5, .945),
+                   ncol=2 if single else 3, frameon=False, fontsize=9)
+        fig.suptitle(title, y=.992, fontsize=14)
+        fig.subplots_adjust(left=.11 if single else .085, right=.985, bottom=.12, top=.74, wspace=.25)
+        fig.savefig(out / f"{filename}.png", dpi=250)
+        fig.savefig(out / f"{filename}.pdf")
+        plt.close(fig)
 
 
 def main():
@@ -217,8 +232,13 @@ def main():
     ap.add_argument("--epsilon", type=float, default=.1)
     ap.add_argument("--gp_refit_every", type=int, default=5)
     ap.add_argument("--output", default="results/pub_fig/discrete_five_method_validation")
+    ap.add_argument("--plot-only", action="store_true",
+                    help="Redraw the regret/MSE pair and separate share and cosine figures from existing metrics.csv")
     args = ap.parse_args()
     out = Path(args.output); out.mkdir(parents=True, exist_ok=True)
+    if args.plot_only:
+        plot(pd.read_csv(out / "metrics.csv"), out, args)
+        return
     rows = []
     for rep in range(args.reps):
         print(f"rep {rep+1}/{args.reps}", flush=True)
