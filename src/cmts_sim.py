@@ -61,13 +61,20 @@ def calibrate_tau(Z, k, q=0.95):
     return np.quantile(dd, q)
 
 
-def project_to_M(z, Z, k, tau, iters=20):
+def project_to_M(z, Z, k, tau, iters=20, diagnostics=None):
     # approximate projection onto M = {d_k <= tau}: pull toward the centroid of
     # the k nearest anchors until valid (bisection on the pull fraction).
-    if kth_dist(z, Z, k) <= tau:
+    trial_distance = kth_dist(z, Z, k)
+    if diagnostics is not None:
+        diagnostics.update(trial_excess=float(trial_distance-tau),
+                           projection_called=bool(trial_distance > tau),
+                           centroid_excess=float("nan"))
+    if trial_distance <= tau:
         return z
     nn = np.argsort(np.linalg.norm(Z - z, axis=1))[:k]
     target = Z[nn].mean(0)
+    if diagnostics is not None:
+        diagnostics["centroid_excess"] = float(kth_dist(target, Z, k)-tau)
     lo, hi = 0.0, 1.0
     for _ in range(iters):
         mid = 0.5 * (lo + hi)
@@ -78,7 +85,7 @@ def project_to_M(z, Z, k, tau, iters=20):
     return z + hi * (target - z)
 
 
-def argmax_over_M(beta, Z, k, tau, refine_steps=12, step0=None):
+def argmax_over_M(beta, Z, k, tau, refine_steps=12, step0=None, diagnostics=None):
     """Continuous argmax of a linear form beta^T z over M (NOT a pool lookup).
 
     1. per-anchor boundary maximizers c_i = z_i + tau * u  (u = beta/||beta||);
@@ -93,12 +100,25 @@ def argmax_over_M(beta, Z, k, tau, refine_steps=12, step0=None):
     z = cands[int(np.argmax(cands @ beta))]
     step = (tau / 3.0 if step0 is None else step0)
     best, best_val = z.copy(), z @ beta
-    for _ in range(refine_steps):
-        zc = project_to_M(z + step * u, Z, k, tau)
-        if zc @ beta > best_val + 1e-12:
+    if diagnostics is not None:
+        diagnostics.update(initial_excess=float(kth_dist(z, Z, k)-tau),
+                           valid_boundary_candidates=int(valid.sum()), steps=[])
+    for iteration in range(refine_steps):
+        record = {} if diagnostics is not None else None
+        zc = project_to_M(z + step * u, Z, k, tau, diagnostics=record)
+        improve = zc @ beta > best_val + 1e-12
+        if record is not None:
+            record.update(iteration=iteration, step_size=float(step),
+                          start_excess=float(kth_dist(z, Z, k)-tau),
+                          result_excess=float(kth_dist(zc, Z, k)-tau),
+                          accepted=bool(improve), objective_gain=float(zc @ beta-best_val))
+            diagnostics["steps"].append(record)
+        if improve:
             best, best_val, z = zc.copy(), zc @ beta, zc
         else:
             step *= 0.5
+    if diagnostics is not None:
+        diagnostics["final_excess"] = float(kth_dist(best, Z, k)-tau)
     return best
 
 

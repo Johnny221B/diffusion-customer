@@ -1,5 +1,12 @@
 # Project Context
 
+## 结果存放约定（2026-09-23 用户要求）
+
+- `results/pub_fig/` 用于用户已确认、可直接更新到 GitHub 的结果。
+- 当前仍在验证的 continuous 图、指标和诊断放在 `outputs/continuous_diagnostics/`。
+- 新的 continuous 实验原始轨迹和 checkpoint 继续放在 `outputs/` 下的实验目录。
+- 不要自动把待验证的 continuous 结果写入 `results/pub_fig/`；用户明确确认后再发布。
+
 ## 目标
 
 SD3.5 + Bayesian Optimization，用 pairwise 偏好学习找出能生成符合用户喜好的鞋图的词。

@@ -286,6 +286,8 @@ def main():
     ap.add_argument("--dim", type=int, default=16, dest="d",
                     help="PCA dim (renamed from --d to avoid conda-run arg clash)")
     ap.add_argument("--k", type=int, default=10)
+    ap.add_argument("--tau_scale", type=float, default=1.0,
+                    help="Multiply the calibrated KNN radius; 1 preserves the historical domain")
     ap.add_argument("--T", type=int, default=200)
     ap.add_argument("--B", type=int, default=8,
                     help="theta-batch size: B independent TS draws per round, "
@@ -320,6 +322,15 @@ def main():
     ap.add_argument("--out_root", default=None,
                     help="if set, all partials share this root; else new timestamp")
     args = ap.parse_args()
+    if not np.isfinite(args.tau_scale) or args.tau_scale <= 0:
+        ap.error("--tau_scale must be finite and positive")
+    if args.out_root and os.path.isdir(args.out_root):
+        for filename in os.listdir(args.out_root):
+            if filename.startswith("config") and filename.endswith(".json"):
+                with open(os.path.join(args.out_root, filename)) as f:
+                    previous = json.load(f)
+                if previous.get("tau_scale", 1.0) != args.tau_scale:
+                    ap.error("A different --tau_scale requires a new --out_root; do not resume across domains")
 
     # === Load anchors + competitor + ref ===
     print(f"Loading pool: {args.pool_dir}")
@@ -350,7 +361,8 @@ def main():
           f"{pca.explained_variance_ratio_.sum():.4f}")
 
     # τ_d (95pct LOO kNN), nn_idx for random_valid_design
-    tau = calibrate_tau(Z, args.k, q=0.95)
+    tau_base = calibrate_tau(Z, args.k, q=0.95)
+    tau = tau_base * args.tau_scale
     print(f"  τ_d = {tau:.4f}")
     D2 = np.linalg.norm(Z[:, None] - Z[None], axis=2)
     nn_idx = np.argsort(D2, axis=1)[:, 1:11]            # exclude self, top-10
@@ -371,16 +383,23 @@ def main():
         stamp = datetime.now().strftime("%m%d_%H%M")
         run_dir = (f"outputs/cmts_{args.tag}_d{args.d}_T{args.T}_n0{args.n0}_"
                    f"v{args.v}_{stamp}")
+        if args.tau_scale != 1.0:
+            run_dir += f"_tau{args.tau_scale:g}"
     os.makedirs(run_dir, exist_ok=True)
     # Each partial writes to the same parent (different sim subdir names)
     print(f"\nWriting trajectories to {run_dir}/")
 
     # Save run config once (per-partial)
     cfg = vars(args).copy()
-    cfg.update({"D_B": D_B, "tau_d": float(tau), "M_kept": int(keep.sum()),
+    cfg.update({"D_B": D_B, "tau_d": float(tau), "tau_base": float(tau_base), "M_kept": int(keep.sum()),
                 "expl_var_ratio_sum": float(pca.explained_variance_ratio_.sum())})
     with open(os.path.join(run_dir, f"config_partial{args.partial_id}.json"), "w") as f:
         json.dump(cfg, f, indent=2)
+    # Preserve exact geometry for later held-out evaluation and acquisition audits.
+    np.savez(os.path.join(run_dir, f"geometry_partial{args.partial_id}.npz"),
+             anchors=Z, z_comp=z_comp, pca_components=pca.components_,
+             pca_mean=pca.mean_, tau=tau, tau_base=tau_base, k=args.k,
+             words=np.asarray(words_kept))
 
     # === Trajectories ===
     all_summaries = []
