@@ -46,5 +46,21 @@ def main():
                     dpi=300, facecolor='white')
     plt.close(fig)
 
+    # A compact landscape alternative, with vector titles for the PDF.
+    fig, axes = plt.subplots(1, 4, figsize=(12, 3.5))
+    for ax, (name, title, subtitle) in zip(axes, PANELS):
+        with Image.open(BACKUP / name) as im:
+            ax.imshow(im.convert('RGB'))
+        ax.axis('off')
+        ax.set_title(title + '\n' + (subtitle or ' '),
+                     fontsize=10.5, fontweight='semibold', pad=8)
+    fig.subplots_adjust(left=.01, right=.99, bottom=.02, top=.81,
+                        wspace=.045)
+    for ext in ('png', 'pdf'):
+        fig.savefig(TARGET / f'discrete_feedback_examples_row.{ext}',
+                    dpi=300, bbox_inches='tight', pad_inches=.04,
+                    facecolor='white')
+    plt.close(fig)
+
 if __name__ == '__main__':
     main()
