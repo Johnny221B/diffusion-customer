@@ -1,7 +1,7 @@
 # Discrete-feedback examples
 
-All four images are 496 x 496 PNG files used to illustrate the discrete
-experiment. Panels (b)--(d) come from the same 228-word x 40-seed image pool.
+All four labeled images are 496 x 566 PNG files used to illustrate discrete
+feedback. Each has a title above the complete original 496 x 496 image. Panels (b)--(d) come from the same 228-word x 40-seed image pool.
 
 | Panel | File | Role | DreamSim distance to reference |
 |---|---|---|---:|
@@ -12,3 +12,7 @@ experiment. Panels (b)--(d) come from the same 228-word x 40-seed image pool.
 
 The pool image in panel (c) is a separate `red` render; it is not the
 reference image itself.
+
+Layout: reference (top left), competitor (top right), closer candidate (bottom left), farther candidate (bottom right). Closer/farther refers to DreamSim distance to the reference relative to the competitor, not a guaranteed sampled binary response.
+
+Unlabeled originals are preserved in `outputs/discrete_feedback_examples_originals/`. Reproduce labels with `scripts/133_label_discrete_feedback_examples.py`.

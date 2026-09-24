@@ -4,6 +4,7 @@
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+from matplotlib.patches import FancyBboxPatch
 import numpy as np
 import pandas as pd
 from PIL import Image
@@ -86,22 +87,45 @@ def main():
     plt.close(fig)
     pd.DataFrame(records).to_csv(OUTPUT / "continuous_generated_designs_values.csv", index=False)
 
-    comparison = [
-        (REFERENCE, "(a) Reference", 0.0, probability(0.0)),
-        (RUN / "images/t999_b1.png", "(b) Round 1000, b1", 0.3255159258842468, 0.7612534856606187),
-        (RUN / "images/t1149_b1.png", "(c) Round 1150, b1", 0.2722637355327606, 0.829993),
-        (RUN / "images/t1299_b7.png", "(d) Round 1300, b7", 0.2672857046127319, 0.835539),
-    ]
-    fig, axes = plt.subplots(1, 4, figsize=(14.0, 3.75))
-    for ax, (path, title, distance, prob) in zip(axes, comparison):
+    # Two benchmarks in the first column; evolution proceeds row-wise
+    # through the remaining six cells. Retain all three late-round examples
+    # from the original closer-candidates comparison.
+    late_row = trajectory[(trajectory.phase == "main") &
+                          (trajectory.t == 999) & (trajectory.b == 1)].iloc[0]
+    evolution = panels[2:5] + [
+        (RUN / "images/t999_b1.png", "Round 1000",
+         float(late_row.ds_to_R), float(late_row.true_p_soft)),
+    ] + panels[6:8]
+    fig, axes = plt.subplots(2, 4, figsize=(14, 7.8))
+    fig.subplots_adjust(left=.035, right=.985, top=.865, bottom=.07,
+                        wspace=.14, hspace=.32)
+    first = axes[0, 0].get_position()
+    last = axes[1, 0].get_position()
+    box = FancyBboxPatch(
+        (first.x0-.016, last.y0-.048), first.width+.032,
+        first.y1-last.y0+.112,
+        boxstyle="round,pad=0.008,rounding_size=0.012",
+        transform=fig.transFigure, facecolor="#E6F2FA",
+        edgecolor="#AACDE3", linewidth=1.2, zorder=-1)
+    fig.add_artist(box)
+    fig.text((first.x0+first.x1)/2, .953, "Benchmark",
+             ha="center", fontsize=15, fontweight="semibold", color="#285A78")
+    right = axes[0, 1].get_position()
+    fig.text((right.x0+axes[0, 3].get_position().x1)/2, .953,
+             "Design evolution", ha="center", fontsize=15, fontweight="semibold")
+    placements = [(axes[0,0], panels[0]),
+                  (axes[1,0], (COMPETITOR, "Competitor", D_B, .5))]
+    placements += list(zip(axes[:,1:].flat, evolution))
+    for ax, (path, title, distance, prob) in placements:
         with Image.open(path) as image:
             ax.imshow(image.convert("RGB"))
         ax.set_xticks([]); ax.set_yticks([])
         for spine in ax.spines.values():
-            spine.set_color("0.78"); spine.set_linewidth(0.8)
-        ax.set_title(title, fontsize=11.5, fontweight="semibold", pad=7)
-        ax.set_xlabel(rf"$D={distance:.4f}$, $p={prob:.3f}$", fontsize=10.5, labelpad=6)
-    fig.subplots_adjust(left=0.015, right=0.995, top=0.92, bottom=0.13, wspace=0.07)
+            spine.set_color("0.78"); spine.set_linewidth(.8)
+        ax.set_title(title.split(") ", 1)[-1], fontsize=12,
+                     fontweight="semibold", pad=7)
+        ax.set_xlabel(rf"$D={distance:.4f}$, $p={prob:.3f}$",
+                      fontsize=10.5, labelpad=6)
     fig.savefig(OUTPUT / "closer_candidates_comparison.png", dpi=300,
                 bbox_inches="tight", facecolor="white")
     fig.savefig(OUTPUT / "closer_candidates_comparison.pdf",
